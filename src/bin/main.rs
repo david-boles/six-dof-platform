@@ -7,22 +7,18 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
+
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
-use esp_hal::i2c::master::Config;
-use esp_hal::time::Rate;
+use embassy_sync::channel::{Channel, SendDynamicSender};
+use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{clock::CpuClock, i2c::master::I2c};
+use esp_hal::clock::CpuClock;
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
 
-use defmt::{Debug2Format, info};
+use defmt::info;
 
 use panic_rtt_target as _;
-use six_dof_platform::ads122c04::{
-    self, Config0, Config1, Config2, Config3, DataRate, Gain, IdacMux, Mux, Register, Vref,
-};
 use six_dof_platform::input_adcs::{AdcsEvent, run_adcs};
 use static_cell::StaticCell;
 
@@ -52,36 +48,40 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     let stream = STREAM.init(Channel::new());
+    let systimer = SystemTimer::new(peripherals.SYSTIMER);
     spawner.spawn(
         run_adcs(
-            stream.dyn_sender(),
+            SendDynamicSender::from(stream.sender()),
             peripherals.I2C0,
             peripherals.GPIO22,
             peripherals.GPIO23,
+            systimer.alarm0.into(),
         )
         .expect("run_adcs spawn failed"),
     );
 
     loop {
         let event = stream.receive().await;
+        // match event {
+        //     AdcsEvent::Readings(_, [_, _, a, b, _, _]) => {
+        //         let a = ((a + 2000) / 80) as usize;
+        //         let b = ((b + 2000) / 80) as usize;
+        //         const BAR: &'static str = "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||";
+        //         const SPACE: &'static str = "                                                                                                              ";
+        //         info!(
+        //             "{}{}\t{}{}",
+        //             BAR[0..a],
+        //             SPACE[0..(50 - a)],
+        //             BAR[0..b],
+        //             SPACE[0..(50 - b)]
+        //         )
+        //     }
+        //     _ => info!("{}", event),
+        // }
         match event {
-            AdcsEvent::Readings(_, [_, _, a, b, _, _]) => {
-                let a = ((a + 2000) / 80) as usize;
-                let b = ((b + 2000) / 80) as usize;
-                const BAR: &'static str = "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||";
-                const SPACE: &'static str = "                                                                                                              ";
-                info!(
-                    "{}{}\t{}{}",
-                    BAR[0..a],
-                    SPACE[0..(50 - a)],
-                    BAR[0..b],
-                    SPACE[0..(50 - b)]
-                )
-            }
-            _ => info!("{}", event),
+            AdcsEvent::Readings(_, _) => {}
+            _ => panic!("{:?}", event),
         }
-        // info!("{}", event);
+        info!("{}", event);
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.2.2/examples
 }

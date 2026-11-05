@@ -1,5 +1,3 @@
-use core::slice;
-
 use bitfield_struct::{bitenum, bitfield};
 use endian_num::Le;
 use esp_hal::{
@@ -115,14 +113,14 @@ pub enum DataIntegrity {
 #[repr(u8)]
 #[bitenum]
 pub enum IdacCurrent {
-    Off = 000,
-    I10 = 001,
-    I50 = 010,
-    I100 = 011,
-    I250 = 100,
-    I500 = 101,
-    I1000 = 110,
-    I1500 = 111,
+    Off = 0b000,
+    I10 = 0b001,
+    I50 = 0b010,
+    I100 = 0b011,
+    I250 = 0b100,
+    I500 = 0b101,
+    I1000 = 0b110,
+    I1500 = 0b111,
     #[fallback]
     Invalid = 0xff,
 }
@@ -145,14 +143,14 @@ pub struct Config2 {
 #[repr(u8)]
 #[bitenum]
 pub enum IdacMux {
-    Disabled = 000,
-    Ain0 = 001,
-    Ain1 = 010,
-    Ain2 = 011,
-    Ain3 = 100,
-    Refp = 101,
-    Refn = 110,
-    Reserved = 111,
+    Disabled = 0b000,
+    Ain0 = 0b001,
+    Ain1 = 0b010,
+    Ain2 = 0b011,
+    Ain3 = 0b100,
+    Refp = 0b101,
+    Refn = 0b110,
+    Reserved = 0b111,
     #[fallback]
     Invalid = 0xff,
 }
@@ -186,14 +184,15 @@ impl Config {
         let c1 = Config1::read(i2c, addr)?;
         let c2 = Config2::read(i2c, addr)?;
         let c3 = Config3::read(i2c, addr)?;
-        return Ok(Config::new()
+        Ok(Config::new()
             .with_config0(c0)
             .with_config1(c1)
             .with_config2(c2)
-            .with_config3(c3));
+            .with_config3(c3))
     }
 
     pub fn write(&self, i2c: &mut I2c<'_, Blocking>, addr: u8) -> Result<(), Error> {
+        #[allow(clippy::identity_op)]
         let ops = [
             0b0100_0000 | (0 << 2),
             self.config0().into(),
@@ -210,30 +209,30 @@ impl Config {
 }
 
 pub trait Register: From<u8> + Into<u8> + Copy {
-    const addr: u8;
+    const ADDR: u8;
 
     fn read(i2c: &mut I2c<'_, Blocking>, addr: u8) -> Result<Self, Error> {
         let mut buf = [0; 1];
-        i2c.write_read(addr, &[0b0010_0000 | (Self::addr << 2)], &mut buf)
+        i2c.write_read(addr, &[0b0010_0000 | (Self::ADDR << 2)], &mut buf)
             .map(|_| Self::from(buf[0]))
     }
 
     fn write(&self, i2c: &mut I2c<'_, Blocking>, addr: u8) -> Result<(), Error> {
-        let buf = [0b0100_0000 | (Self::addr << 2), (*self).into()];
+        let buf = [0b0100_0000 | (Self::ADDR << 2), (*self).into()];
         i2c.write(addr, &buf)
     }
 }
 impl Register for Config0 {
-    const addr: u8 = 0;
+    const ADDR: u8 = 0;
 }
 impl Register for Config1 {
-    const addr: u8 = 1;
+    const ADDR: u8 = 1;
 }
 impl Register for Config2 {
-    const addr: u8 = 2;
+    const ADDR: u8 = 2;
 }
 impl Register for Config3 {
-    const addr: u8 = 3;
+    const ADDR: u8 = 3;
 }
 
 pub fn reset(i2c: &mut I2c<'_, Blocking>, addr: u8) -> Result<(), Error> {
@@ -253,6 +252,7 @@ pub fn read_data(i2c: &mut I2c<'_, Blocking>, addr: u8, buf: &mut [u8]) -> Resul
 }
 
 /// `buf.len() % 2 == 0`.
+#[allow(clippy::result_unit_err)]
 pub fn validate_inversion(buf: &[u8]) -> Result<(), ()> {
     let (orig, inv) = buf.split_at(buf.len() / 2);
     orig.iter().zip(inv.iter()).all(|(o, i)| *o == !i).ok_or(())
