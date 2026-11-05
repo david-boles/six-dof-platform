@@ -7,22 +7,30 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use esp_hal::clock::CpuClock;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
+use esp_hal::i2c::master::Config;
+use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
-
+use esp_hal::{clock::CpuClock, i2c::master::I2c};
 
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 
-use defmt::info;
+use defmt::{Debug2Format, info};
 
 use panic_rtt_target as _;
-
-
+use six_dof_platform::ads122c04::{
+    self, Config0, Config1, Config2, Config3, DataRate, Gain, IdacMux, Mux, Register, Vref,
+};
+use six_dof_platform::input_adcs::{AdcsEvent, run_adcs};
+use static_cell::StaticCell;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+static STREAM: StaticCell<Channel<CriticalSectionRawMutex, AdcsEvent, 16>> = StaticCell::new();
 
 #[allow(
     clippy::large_stack_frames,
@@ -38,21 +46,41 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    
-
-
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
 
     info!("Embassy initialized!");
 
-
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    let stream = STREAM.init(Channel::new());
+    spawner.spawn(
+        run_adcs(
+            stream.dyn_sender(),
+            peripherals.I2C0,
+            peripherals.GPIO22,
+            peripherals.GPIO23,
+        )
+        .expect("run_adcs spawn failed"),
+    );
 
     loop {
-        info!("Hello world!");
-        Timer::after(Duration::from_secs(1)).await;
+        let event = stream.receive().await;
+        match event {
+            AdcsEvent::Readings(_, [_, _, a, b, _, _]) => {
+                let a = ((a + 2000) / 80) as usize;
+                let b = ((b + 2000) / 80) as usize;
+                const BAR: &'static str = "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||";
+                const SPACE: &'static str = "                                                                                                              ";
+                info!(
+                    "{}{}\t{}{}",
+                    BAR[0..a],
+                    SPACE[0..(50 - a)],
+                    BAR[0..b],
+                    SPACE[0..(50 - b)]
+                )
+            }
+            _ => info!("{}", event),
+        }
+        // info!("{}", event);
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.2.2/examples

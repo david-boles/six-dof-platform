@@ -1,11 +1,11 @@
 [package]
-edition      = "2024"
-name         = "6dof-platform"
+edition = "2024"
+name = "six-dof-platform"
 rust-version = "1.95"
-version      = "0.1.0"
+version = "0.1.0"
 
 [[bin]]
-name = "6dof-platform"
+name = "six-dof-platform"
 path = "./src/bin/main.rs"
 
 [dependencies]
@@ -13,16 +13,19 @@ esp-hal = { version = "~1.2.2", features = ["defmt", "esp32c6", "unstable"] }
 
 esp-rtos = { version = "0.4.0", features = ["defmt", "embassy", "esp32c6"] }
 
-defmt                  = "1.0.1"
+defmt = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["defmt", "esp32c6"] }
 
 embassy-executor = { version = "0.10.0", features = ["defmt"] }
-embassy-time     = { version = "0.5.0", features = ["defmt"] }
+embassy-time = { version = "0.5.0", features = ["defmt"] }
 panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
-rtt-target       = { version = "0.6.2", features = ["defmt"] }
+rtt-target = { version = "0.6.2", features = ["defmt"] }
 
 critical-section = "1.2.0"
-static_cell      = "2.1.1"
+static_cell = "2.1.1"
+bitfield-struct = "0.13.0"
+endian-num = "0.2.0"
+embassy-sync = "0.8.0"
 
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
@@ -32,7 +35,7 @@ static_cell      = "2.1.1"
 opt-level = "s"
 
 [profile.release]
-codegen-units = 1     # LLVM can perform better optimizations using a single thread
-debug         = 2     # prefer slower builds but better debugging experience
-lto           = 'fat'
-opt-level     = 's'
+codegen-units = 1 # LLVM can perform better optimizations using a single thread
+debug = 2         # prefer slower builds but better debugging experience
+lto = 'fat'
+opt-level = 's'
