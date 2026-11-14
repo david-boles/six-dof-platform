@@ -29,7 +29,7 @@ const ADC_ADDRS: [u8; 3] = [0x40, 0x41, 0x44];
 
 const CONFIG0: Config0 = Config0::new()
     .with_mux(Mux::Ain0Ain1)
-    .with_gain(Gain::G1)
+    .with_gain(Gain::G128)
     .with_pga_bypass(false);
 
 const CONFIG: Config = Config::new()
@@ -93,8 +93,8 @@ enum AdcChannel {
 impl AdcChannel {
     const fn config0(&self) -> Config0 {
         CONFIG0.with_mux(match self {
-            AdcChannel::First => Mux::Ain0Ain1,
-            AdcChannel::Second => Mux::Ain2Ain3,
+            AdcChannel::First => Mux::Ain2Ain3,
+            AdcChannel::Second => Mux::Ain0Ain1,
         })
     }
 
