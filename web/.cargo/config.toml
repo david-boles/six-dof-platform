@@ -1,0 +1,8 @@
+[alias]
+# Build the UI into a single HTML file: `cargo xtask` (see xtask/src/main.rs).
+xtask = "run --package xtask --"
+
+[target.wasm32-unknown-unknown]
+# web-sys only exposes the Web Serial bindings (`Serial`, `SerialPort`, ...)
+# when this cfg is set, because the API isn't a finished web standard yet.
+rustflags = ["--cfg=web_sys_unstable_apis"]

@@ -23,7 +23,10 @@ const ACCEPTABLE_ERROR_PERIOD: Duration = Duration::from_secs(1);
 
 /// Period of the ISR. The ISR's I2C work (3 x read + mux write + start)
 /// plus the actual ADC measurement time must both fit inside it.
-const HALF_SAMPLE_PERIOD: HalDuration = HalDuration::from_millis(2);
+const HALF_SAMPLE_PERIOD: HalDuration = HalDuration::from_micros(2_000);
+
+/// Time between complete sets of readings (both channels of every ADC).
+pub const SAMPLE_PERIOD: HalDuration = HalDuration::from_micros(2 * HALF_SAMPLE_PERIOD.as_micros());
 
 const ADC_ADDRS: [u8; 3] = [0x40, 0x41, 0x44];
 

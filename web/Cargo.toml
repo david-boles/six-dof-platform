@@ -1,0 +1,22 @@
+# Web UI workspace.
+#
+# - `app/`: the Leptos UI, compiled to wasm32-unknown-unknown.
+# - `xtask/`: native build helper. `cargo xtask` (alias in .cargo/config.toml) builds
+#   `app` and bundles it into a single self-contained HTML file: dist/six-dof.html.
+[workspace]
+resolver = "3"
+members = ["app", "xtask"]
+
+[workspace.dependencies]
+# wasm-bindgen's JS glue generator (`wasm-bindgen-cli-support`, used by xtask) must be
+# exactly the same version as the `wasm-bindgen` crate the app is compiled against.
+# web-sys/js-sys pin it exactly too, so bump all of these together.
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-cli-support = "=0.2.130"
+
+[profile.release]
+# Smaller wasm (Leptos' recommended settings for size).
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

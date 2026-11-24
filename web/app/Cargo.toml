@@ -1,0 +1,31 @@
+[package]
+name = "six-dof-web"
+version = "0.1.0"
+edition = "2024"
+description = "Browser UI for the six-DOF test stand (Leptos, Web Serial)"
+
+[dependencies]
+six-dof-protocol = { path = "../../protocol", features = ["use-std"] }
+# David's fork: v0.12.1 + embassy-executor 0.10 support (TODO 1.4).
+# Keep this rev identical in protocol/, firmware/ and web/.
+# `cobs` enables the COBS frame accumulator used by our Web Serial wire.
+postcard-rpc = { git = "https://github.com/david-boles/postcard-rpc", rev = "301d1384d1612a90fb3a6f3ea188d326f80a574b", features = ["use-std", "cobs"] }
+cobs = { version = "0.4", default-features = false, features = ["alloc"] }
+
+leptos = { version = "0.8", features = ["csr"] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Navigator",
+    "Window",
+    "Serial",
+    "SerialPort",
+    "SerialOptions",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+] }
+console_error_panic_hook = "0.1"
+thiserror = "2"
