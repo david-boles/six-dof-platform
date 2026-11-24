@@ -10,10 +10,11 @@
   - Keep it updated as items get done or decided, and record measurements and decisions in the items themselves, e.g. `- [x] **1.2** (done: …) description`.
 
 ## Where we left off (update at the end of each session)
-- **2026-11-24:** End-to-end path works on hardware (TODO 2.0): firmware (postcard-rpc over USB-Serial-JTAG) → browser UI (`web/dist/six-dof.html`, Web Serial) showing raw counts, ADC status and device log. Repo restructured into `firmware/`, `protocol/`, `web/`.
-- Known issue: `missed` jumps after connecting (stale queued readings), TODO 2.1.3.
-- Open from the code review / setup: `.vscode` paths for the new layout (David), rust-analyzer checks `web/` for the host target (Web Serial code shows false errors), whether to commit `protocol/Cargo.lock`, stale root `target/`. Fake-device test scaffolding lives only in the VM's `/tmp` (lost on VM reset); David hasn't decided whether to move it into the repo.
-- Next candidates: 2.1.3, unexercised hardware cases in 2.0 (errors, unplug, page closed, probe-rs + serial at once), zeroing (3.1), 3D view (4.1/4.2); graphs on hold (4.3).
+- **2026-11-24:** End-to-end path works on hardware (TODO 4.0): firmware (postcard-rpc over USB-Serial-JTAG) → browser UI (`web/dist/six-dof.html`, Web Serial) showing raw counts, ADC status and device log. Repo restructured into `firmware/`, `protocol/`, `web/`.
+- Known issue: `missed` jumps after connecting (stale queued readings), TODO 4.1.3.
+- Open from the code review / setup: `.vscode` paths for the new layout (David), rust-analyzer checks `web/` for the host target (Web Serial code shows false errors), stale root `target/` (`protocol/Cargo.lock` is now gitignored; David unstages it with `git rm --cached`). Fake-device test scaffolding lives only in the VM's `/tmp` (lost on VM reset); David hasn't decided whether to move it into the repo.
+- Zeroing/calibration design decided (TODO 1.5 and section 2 intro). **Waiting on David** for geometry, weight-mount positions and load cell data (TODO 2.2).
+- Next candidates: 2.1 (rename `protocol/` → `common/`), then 2.3–2.5 (wrench topic, writable C/z, `average`, zero button) as far as possible without 2.2's data (placeholder geometry), then the 3D view (3.1/3.2) **before** the calibration wizard (3.5). Also 4.1.3 and the unexercised hardware cases in 4.0. Graphs on hold (3.3).
 
 ## Standing decisions (don't re-suggest)
 - **David handles all git commits and pushes himself.** The agent may edit files and use read-only git commands (`status`, `diff`, `log`), but must not run `git add`/`commit`/`push` or other commands that change history. When a logical chunk of work is done, say so briefly. Don't suggest commit messages.
@@ -32,6 +33,7 @@
 - postcard-rpc comes from David's fork (`david-boles/postcard-rpc`, rev `301d138…`); keep the rev identical in all three `Cargo.toml`s.
 - References in `reference/`: ADS122C04 datasheet, Adafruit board schematic, link to the Adafruit guide (`Adafruit.md`).
 - Architecture (TODO 1.x): `postcard-rpc` over the USB-Serial-JTAG serial port (transport-agnostic; Wi-Fi later for the monocopter); browser-only Rust/WASM UI over Web Serial (Leptos + `three-d` + canvas plots), no host program.
+- Calibration (TODO section 2): firmware computes w = C·(c − z) about the origin (0,0,0); C and z are UI-writable and RAM-only (boot defaults: z = 0, C from CAD geometry × datasheet N/count). Firmware also averages (1 s `average` endpoint). The browser stores the calibration (never auto-applied; the user is offered to apply it), applies the reference-point transform, and runs the empirical calibration wizard. Only one device exists, so nothing is keyed by device ID.
 - Build checks (agent): `cargo build` in `firmware/` and `protocol/`; in `web/`: `cargo clippy -p six-dof-web --target wasm32-unknown-unknown` and `cargo xtask` (writes `web/dist/six-dof.html`). Run on hardware (David): `cargo run` in `firmware/` (probe-rs runner in `firmware/.cargo/config.toml`), then open `web/dist/six-dof.html` in Chromium.
 - UI testing without hardware: headless Chromium (browser tool) against a fake `navigator.serial` fed with frames generated from the real protocol crate. Never click Connect without the fake installed (the real port chooser can't be answered headless).
 - After editing Rust code, run `cargo fmt` and `cargo clippy`.
