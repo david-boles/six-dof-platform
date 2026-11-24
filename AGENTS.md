@@ -3,6 +3,8 @@
 ## About the user
 - David (`deb`). Reasonably familiar with embedded Rust and this hardware, but **explain anything novel to him in detail** (teaching is a goal, not just getting things done). When unsure whether something is new to him, err on the side of too verbose.
 - Tone: plain and factual. No emotional language, praise, sign-offs or emoji.
+- Avoid acronyms (in code, docs and replies) unless they're very common (e.g. ADC, USB, I2C); write the term out instead.
+- Don't introduce short aliases for existing constants or items (e.g. `const R: f64 = CIRCUMRADIUS_MM;`); use the full name. New derived values get descriptive names with units.
 - Before quoting docs, links, datasheet values or other facts, verify them (fetch the page, read the source or datasheet, measure on the hardware). Say when something is unverified, and correct earlier mistakes explicitly.
 - Work plan (once it exists) lives in `TODO.md`:
   - Sections are ordered by priority. `[?]` means the item needs a decision first.
@@ -10,16 +12,17 @@
   - Keep it updated as items get done or decided, and record measurements and decisions in the items themselves, e.g. `- [x] **1.2** (done: …) description`.
 
 ## Where we left off (update at the end of each session)
-- **2026-11-24:** End-to-end path works on hardware (TODO 4.0): firmware (postcard-rpc over USB-Serial-JTAG) → browser UI (`web/dist/six-dof.html`, Web Serial) showing raw counts, ADC status and device log. Repo restructured into `firmware/`, `protocol/`, `web/`.
+- **2026-11-24:** End-to-end path works on hardware (TODO 4.0): firmware (postcard-rpc over USB-Serial-JTAG) → browser UI (`web/dist/six-dof.html`, Web Serial) showing raw counts, ADC status and device log. Repo restructured into `firmware/`, `common/` (was `protocol/`), `web/`.
 - Known issue: `missed` jumps after connecting (stale queued readings), TODO 4.1.3.
-- Open from the code review / setup: `.vscode` paths for the new layout (David), rust-analyzer checks `web/` for the host target (Web Serial code shows false errors), stale root `target/` (`protocol/Cargo.lock` is now gitignored; David unstages it with `git rm --cached`). Fake-device test scaffolding lives only in the VM's `/tmp` (lost on VM reset); David hasn't decided whether to move it into the repo.
-- Zeroing/calibration design decided (TODO 1.5 and section 2 intro). Geometry, load cell data, sign conventions and weight mounts received, confirmed and checked: `reference/geometry.md` (positive counts = tension; reported wrench = external load; default C = +A·diag(k_nominal)). Nothing outstanding from David for TODO 2.2.
-- Next candidates: 2.1 (rename `protocol/` → `common/`), then 2.3–2.5 (wrench topic, writable C/z, `average`, zero button) as far as possible without 2.2's data (placeholder geometry), then the 3D view (3.1/3.2) **before** the calibration wizard (3.5). Also 4.1.3 and the unexercised hardware cases in 4.0. Graphs on hold (3.3).
+- Open from the code review / setup: `.vscode` paths for the new layout (David), rust-analyzer checks `web/` for the host target (Web Serial code shows false errors), stale root `target/` (`common/Cargo.lock` is gitignored). Fake-device test scaffolding lives only in the VM's `/tmp` (lost on VM reset); David hasn't decided whether to move it into the repo.
+- Zeroing/calibration design decided (TODO 1.5 and section 2 intro). Geometry, load cell data, sign conventions and weight mounts received, confirmed and checked: `reference/geometry.md` (positive counts = tension; reported wrench = external load; default C = +A·diag(k_nominal)). 2.1 (rename to `common/`; all crates prefixed `six-dof-platform-`) and 2.2 (`common/src/geometry.rs`: constants, A, default C, 6×6 solve, tests against `reference/geometry.md`) done 2026-11-24; builds checked, not yet run on hardware (no behavior change).
+- Next candidates: 2.3–2.5 (wrench topic, writable C/z, `average`, zero button), then the 3D view (3.1/3.2) **before** the calibration wizard (3.5). Also 4.1.3 and the unexercised hardware cases in 4.0. Graphs on hold (3.3).
 
 ## Standing decisions (don't re-suggest)
 - **David handles all git commits and pushes himself.** The agent may edit files and use read-only git commands (`status`, `diff`, `log`), but must not run `git add`/`commit`/`push` or other commands that change history. When a logical chunk of work is done, say so briefly. Don't suggest commit messages.
 - **David runs long-running and interactive jobs himself** (e.g. flashing and running on hardware, long captures). Give him a plain foreground command to run instead of starting background jobs.
 - Change files with the edit/write tools, not via scripts in bash (e.g. Python or `sed -i`).
+- Keep the three separate Cargo projects (reviewed 2026-11-24: no per-package targets on stable, profiles and rust-analyzer target are per workspace). Also declined: re-exporting postcard-rpc from `common` to deduplicate the rev.
 - Read-only exploration is fine. Ask before making changes outside the repo. Don't edit application or user settings; tell David what to change instead.
 
 ## Project
@@ -28,12 +31,13 @@
 - 3× Adafruit ADS122C04 (24-bit ADC) boards on I2C0 (SDA GPIO22, SCL GPIO23, 1 MHz) at `0x40`, `0x41`, `0x44`. Each board reads two load cells (AIN0–AIN1 and AIN2–AIN3, gain 128, external reference).
 - Repo layout: three separate Cargo projects (not one workspace, because firmware and web need different targets), each with its own `.cargo/config.toml` / `rust-toolchain.toml`:
   - `firmware/`: `src/ads122c04.rs` register/command driver; `src/input_adcs.rs` timer ISR sampling (2 ms per channel → 6 readings at 250 Hz); `src/comms.rs` postcard-rpc server + pump/publisher tasks; `src/bin/main.rs` setup.
-  - `protocol/` (`six-dof-protocol`): `no_std` ICD (endpoints, topics, message types) shared by firmware and web. Features `defmt`, `use-std`.
-  - `web/`: workspace with `app` (`six-dof-web`, Leptos UI, wasm) and `xtask` (bundler).
+  - `common/` (`six-dof-platform-common`, `no_std`), shared by firmware and web: `src/interface.rs` postcard-rpc interface (endpoints, topics, message types, max message sizes); `src/geometry.rs` platform geometry, load cell constants, wrench matrix `A`, default calibration `DEFAULT_C`, 6×6 `solve`. Features `defmt`, `use-std`.
+  - `web/`: workspace with `app` (`six-dof-platform-web`, Leptos UI, wasm) and `xtask` (`six-dof-platform-xtask`, bundler; run as `cargo xtask`).
+  - Crate names: always prefixed `six-dof-platform-` (David); the firmware crate is `six-dof-platform-firmware`.
 - postcard-rpc comes from David's fork (`david-boles/postcard-rpc`, rev `301d138…`); keep the rev identical in all three `Cargo.toml`s.
 - References in `reference/`: ADS122C04 datasheet, Adafruit board schematic, link to the Adafruit guide (`Adafruit.md`), platform geometry and load cell data (`geometry.md`: octahedron, origin, link order and signs, k_nominal, wrench matrix A; use it for all geometry constants).
 - Architecture (TODO 1.x): `postcard-rpc` over the USB-Serial-JTAG serial port (transport-agnostic; Wi-Fi later for the monocopter); browser-only Rust/WASM UI over Web Serial (Leptos + `three-d` + canvas plots), no host program.
 - Calibration (TODO section 2): firmware computes w = C·(c − z) about the origin (0,0,0); C and z are UI-writable and RAM-only (boot defaults: z = 0, C from CAD geometry × datasheet N/count). Firmware also averages (1 s `average` endpoint). The browser stores the calibration (never auto-applied; the user is offered to apply it), applies the reference-point transform, and runs the empirical calibration wizard. Only one device exists, so nothing is keyed by device ID.
-- Build checks (agent): `cargo build` in `firmware/` and `protocol/`; in `web/`: `cargo clippy -p six-dof-web --target wasm32-unknown-unknown` and `cargo xtask` (writes `web/dist/six-dof.html`). Run on hardware (David): `cargo run` in `firmware/` (probe-rs runner in `firmware/.cargo/config.toml`), then open `web/dist/six-dof.html` in Chromium.
+- Build checks (agent): `cargo build` in `firmware/`; `cargo build` (= `no_std` check) and `cargo test` in `common/`; in `web/`: `cargo clippy -p six-dof-platform-web --target wasm32-unknown-unknown` and `cargo xtask` (writes `web/dist/six-dof.html`). Run on hardware (David): `cargo run` in `firmware/` (probe-rs runner in `firmware/.cargo/config.toml`), then open `web/dist/six-dof.html` in Chromium.
 - UI testing without hardware: headless Chromium (browser tool) against a fake `navigator.serial` fed with frames generated from the real protocol crate. Never click Connect without the fake installed (the real port chooser can't be answered headless).
 - After editing Rust code, run `cargo fmt` and `cargo clippy`.

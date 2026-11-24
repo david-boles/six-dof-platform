@@ -1,6 +1,6 @@
 [alias]
 # Build the UI into a single HTML file: `cargo xtask` (see xtask/src/main.rs).
-xtask = "run --package xtask --"
+xtask = "run --package six-dof-platform-xtask --"
 
 [target.wasm32-unknown-unknown]
 # web-sys only exposes the Web Serial bindings (`Serial`, `SerialPort`, ...)

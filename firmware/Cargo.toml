@@ -1,11 +1,11 @@
 [package]
 edition = "2024"
-name = "six-dof-platform"
+name = "six-dof-platform-firmware"
 rust-version = "1.98"
 version = "0.1.0"
 
 [[bin]]
-name = "six-dof-platform"
+name = "six-dof-platform-firmware"
 path = "./src/bin/main.rs"
 
 [dependencies]
@@ -31,9 +31,9 @@ heapless = "0.9"
 # Only for `cobs::max_encoding_length` (buffer sizes); postcard-rpc does the encoding.
 cobs = { version = "0.4", default-features = false }
 
-six-dof-protocol = { path = "../protocol", features = ["defmt"] }
+six-dof-platform-common = { path = "../common", features = ["defmt"] }
 # David's fork: v0.12.1 + embassy-executor 0.10 support (TODO 1.4).
-# Keep this rev identical in protocol/, firmware/ and web/.
+# Keep this rev identical in common/, firmware/ and web/.
 postcard-rpc = { git = "https://github.com/david-boles/postcard-rpc", rev = "301d1384d1612a90fb3a6f3ea188d326f80a574b", features = ["embedded-io-async-0_6-server", "defmt"] }
 # postcard-rpc 0.12's embedded-io server is generic over embassy-sync 0.7's
 # `RawMutex` trait, so its mutex type parameter must come from 0.7 (we use 0.8 elsewhere).

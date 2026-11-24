@@ -1,8 +1,8 @@
 [package]
-name = "six-dof-protocol"
+name = "six-dof-platform-common"
 version = "0.1.0"
 edition = "2024"
-description = "Messages shared between the test stand firmware and the web UI (postcard-rpc ICD)"
+description = "Code shared between the test stand firmware and the web UI: postcard-rpc interface, platform geometry, calibration math"
 
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive"] }
@@ -11,7 +11,7 @@ postcard-schema = { version = "0.2.2", features = ["derive"] }
 # Note: postcard's `experimental` module isn't covered by its semver guarantees.
 postcard = { version = "1.1", default-features = false, features = ["experimental-derive"] }
 # David's fork: v0.12.1 + embassy-executor 0.10 support (TODO 1.4).
-# Keep this rev identical in protocol/, firmware/ and web/.
+# Keep this rev identical in common/, firmware/ and web/.
 postcard-rpc = { git = "https://github.com/david-boles/postcard-rpc", rev = "301d1384d1612a90fb3a6f3ea188d326f80a574b", default-features = false }
 
 defmt = { version = "1.0", optional = true }

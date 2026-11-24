@@ -36,7 +36,7 @@ use postcard_rpc::{
         },
     },
 };
-use six_dof_protocol::{
+use six_dof_platform_common::interface::{
     AdcStatus, AdcStatusTopic, DeviceInfo, ENDPOINT_LIST, GetAdcStatusEndpoint, GetInfoEndpoint,
     MAX_DEVICE_MESSAGE_SIZE, MAX_LOG_LEN, MAX_REQUEST_SIZE, Readings, ReadingsTopic,
     TOPICS_IN_LIST, TOPICS_OUT_LIST,

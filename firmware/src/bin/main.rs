@@ -20,8 +20,10 @@ use defmt::{info, warn};
 
 use panic_rtt_target as _;
 use postcard_rpc::server::{Dispatch, Server};
-use six_dof_platform::comms::{self, App, AppServer, Context, RX_FRAME_LEN, STORAGE, Stream};
-use six_dof_platform::input_adcs::run_adcs;
+use six_dof_platform_firmware::comms::{
+    self, App, AppServer, Context, RX_FRAME_LEN, STORAGE, Stream,
+};
+use six_dof_platform_firmware::input_adcs::run_adcs;
 use static_cell::{ConstStaticCell, StaticCell};
 
 // This creates a default app-descriptor required by the esp-idf bootloader.

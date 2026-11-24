@@ -1,4 +1,5 @@
-//! Interface control document (ICD) for the six-DOF test stand.
+//! Communication interface of the six-DOF test stand: postcard-rpc endpoints,
+//! topics and message types.
 //!
 //! Shared by the firmware (`firmware/`, `no_std`) and the web UI (`web/`, wasm).
 //! Every message type here is serialized with `postcard`. `postcard-rpc` identifies
@@ -6,12 +7,10 @@
 //! type here changes its key: a firmware/UI mismatch shows up as "unknown key"
 //! instead of being silently mis-decoded.
 //!
-//! Also available without being listed here (postcard-rpc's standard ICD,
+//! Also available without being listed here (postcard-rpc's standard interface,
 //! `postcard_rpc::standard_icd`): a ping endpoint (`postcard-rpc/ping`) and
 //! `LoggingTopic` (`postcard-rpc/logging`), on which the firmware sends free-text
 //! log messages such as ADC error details.
-
-#![cfg_attr(not(feature = "use-std"), no_std)]
 
 use postcard::experimental::max_size::MaxSize;
 use postcard_rpc::{Endpoint, Topic, TopicDirection, endpoints, topics};

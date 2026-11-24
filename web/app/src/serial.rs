@@ -25,7 +25,8 @@ use web_sys::{
 pub type Client = HostClient<WireError>;
 
 /// The accumulator holds one COBS-encoded device message including its terminating 0.
-const MAX_FRAME: usize = cobs::max_encoding_length(six_dof_protocol::MAX_DEVICE_MESSAGE_SIZE) + 1;
+const MAX_FRAME: usize =
+    cobs::max_encoding_length(six_dof_platform_common::interface::MAX_DEVICE_MESSAGE_SIZE) + 1;
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum SerialError {

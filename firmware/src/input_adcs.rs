@@ -32,6 +32,7 @@ const ADC_ADDRS: [u8; 3] = [0x40, 0x41, 0x44];
 
 const CONFIG0: Config0 = Config0::new()
     .with_mux(Mux::Ain0Ain1)
+    // KEEP IN SYNC with `six_dof_platform_common::geometry::ADC_GAIN` (default calibration).
     .with_gain(Gain::G128)
     .with_pga_bypass(false);
 

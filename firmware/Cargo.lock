@@ -1645,7 +1645,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "six-dof-platform"
+name = "six-dof-platform-common"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.2.0",
+ "postcard",
+ "postcard-rpc",
+ "postcard-schema",
+ "serde",
+]
+
+[[package]]
+name = "six-dof-platform-firmware"
 version = "0.1.0"
 dependencies = [
  "bitfield-struct",
@@ -1665,19 +1676,8 @@ dependencies = [
  "panic-rtt-target",
  "postcard-rpc",
  "rtt-target",
- "six-dof-protocol",
+ "six-dof-platform-common",
  "static_cell",
-]
-
-[[package]]
-name = "six-dof-protocol"
-version = "0.1.0"
-dependencies = [
- "defmt 1.2.0",
- "postcard",
- "postcard-rpc",
- "postcard-schema",
- "serde",
 ]
 
 [[package]]

@@ -39,7 +39,7 @@ Checks (passed): all 6 links and all 6 triangle edges are 150.000000 mm long; ea
 
 ## Load cells and ADC
 - Rated output S = 1 mV/V, capacity 98.0665 N (10 kg·g), ADC gain 128, external reference tied to the bridge excitation (3.3 V; ratiometric, so the excitation voltage cancels).
-- One ADC count = V_ref / (Gain · 2²³) (datasheet: FSR = ±V_ref/Gain over ±2²³ counts). Cell output at force F = S · V_exc · F / capacity. With V_ref = V_exc:
+- One ADC count = V_ref / (Gain · 2²³) (datasheet: full-scale range ±V_ref/Gain over ±2²³ counts). Cell output at force F = S · V_exc · F / capacity. With V_ref = V_exc:
   **k_nominal = capacity / (Gain · 2²³ · S) = 98.0665 / (128 · 8388608 · 0.001) = 9.133155e-5 N/count.**
   Full capacity = 1,073,742 counts (about 12.8 % of the ADC's ±2²³ range).
 - **Sign: positive counts = tension in the link, negative = compression** (David). An upward external force on the platform is held down by the links → tension → positive counts; a weight on the platform → mostly compression → negative counts.

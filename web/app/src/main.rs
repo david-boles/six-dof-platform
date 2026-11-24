@@ -10,7 +10,7 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use leptos::{prelude::*, task::spawn_local};
 use postcard_rpc::{host_client::MultiSubRxError, standard_icd::LoggingTopic};
-use six_dof_protocol::{
+use six_dof_platform_common::interface::{
     AdcStatus, AdcStatusTopic, CHANNELS, DeviceInfo, GetAdcStatusEndpoint, GetInfoEndpoint,
     Readings, ReadingsTopic,
 };

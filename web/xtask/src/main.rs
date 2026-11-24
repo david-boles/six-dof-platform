@@ -1,7 +1,7 @@
 //! `cargo xtask [--dev]`: build the web app into one self-contained HTML file.
 //!
 //! Steps:
-//! 1. `cargo build -p six-dof-web --target wasm32-unknown-unknown [--release]`.
+//! 1. `cargo build -p six-dof-platform-web --target wasm32-unknown-unknown [--release]`.
 //! 2. Run wasm-bindgen (as a library, so no separately installed CLI is needed) to
 //!    generate the JS glue that loads the wasm and connects it to browser APIs.
 //! 3. Inline the JS and the base64-encoded wasm into a single HTML page:
@@ -22,7 +22,7 @@ use std::{
 use base64::Engine;
 use wasm_bindgen_cli_support::Bindgen;
 
-const APP_PACKAGE: &str = "six-dof-web";
+const APP_PACKAGE: &str = "six-dof-platform-web";
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 const OUTPUT: &str = "dist/six-dof.html";
 
