@@ -263,7 +263,7 @@ pub fn Wizard(
 
     view! {
         <h3>"Calibration wizard"</h3>
-        <p style="max-width: 900px">
+        <p class="hint">
             "Fits one scale per load cell from known weights on the mounts M0\u{2013}M5 (M0 at \
              (0, \u{2212}50) mm, then counter-clockwise seen from above, every 60\u{b0}), keeping the \
              CAD geometry. Each step is a 1 s average; keep the stand still while capturing."
@@ -271,33 +271,34 @@ pub fn Wizard(
         {move || match step.get() {
             Step::Setup => {
                 view! {
-                    <p>
-                        "Mass of each weight (g): "
-                        <input
-                            type="number"
-                            step="any"
-                            style="width: 7em"
-                            prop:value=move || mass_g.get().to_string()
-                            on:change=move |ev| {
-                                if let Ok(v) = event_target_value(&ev).trim().parse::<f64>() {
-                                    mass_g.set(v);
+                    <div class="row">
+                        <label class="inline">
+                            "Mass of each weight (g)"
+                            <input
+                                type="number"
+                                step="any"
+                                prop:value=move || mass_g.get().to_string()
+                                on:change=move |ev| {
+                                    if let Ok(v) = event_target_value(&ev).trim().parse::<f64>() {
+                                        mass_g.set(v);
+                                    }
                                 }
-                            }
-                        />
-                        " "
-                        <label>
+                            />
+                        </label>
+                        <label class="inline">
                             <input
                                 type="checkbox"
                                 prop:checked=move || pairs.get()
                                 on:change=move |ev| pairs.set(event_target_checked(&ev))
                             />
-                            " also pairs of weights (21 cases instead of 6; needs two weights)"
+                            "also pairs of weights (21 cases instead of 6; needs two weights)"
                         </label>
-                        " "
-                        <button on:click=on_start disabled=move || !connected()>
+                    </div>
+                    <div class="row">
+                        <button class="primary" on:click=on_start disabled=move || !connected()>
                             "Start"
                         </button>
-                    </p>
+                    </div>
                 }
                     .into_any()
             }
@@ -321,51 +322,48 @@ pub fn Wizard(
                     _ => "Remove the weights, then capture (checks drift).".to_string(),
                 };
                 view! {
-                    <p style="background: #eef; padding: 0.5em; max-width: 900px">
-                        {instruction}
-                    </p>
-                    <p>
+                    <p class="notice">{instruction}</p>
+                    <div class="row">
                         <button
+                            class="primary"
                             on:click=on_capture
                             disabled=move || capturing.get() || !connected()
                         >
-                            {move || if capturing.get() { "Capturing..." } else { "Capture" }}
+                            {move || if capturing.get() { "Capturing…" } else { "Capture" }}
                         </button>
-                        " "
                         <button on:click=on_back disabled=move || capturing.get()>
                             "Back"
                         </button>
-                        " "
                         <button on:click=on_cancel disabled=move || capturing.get()>
                             "Cancel"
                         </button>
-                    </p>
+                    </div>
                 }
                     .into_any()
             }
         }}
         <Show when=move || step.get() == Step::Results && matches!(fit.get(), Some(Ok(_)))>
-            <p>
-                <button on:click=on_apply disabled=move || !connected()>
+            <div class="row">
+                <button class="primary" on:click=on_apply disabled=move || !connected()>
                     "Apply to the device"
                 </button>
-                " "
                 <button on:click=on_save>"Save in this browser"</button>
-                " "
                 <button on:click=on_back>"Back"</button>
-                " "
                 <button on:click=on_cancel>"Start over"</button>
-            </p>
+            </div>
         </Show>
         // Back is also needed when the fit failed (to redo captures).
         <Show when=move || step.get() == Step::Results && matches!(fit.get(), Some(Err(_)))>
-            <p>
+            <div class="row">
                 <button on:click=on_back>"Back"</button>
-                " "
                 <button on:click=on_cancel>"Start over"</button>
-            </p>
+            </div>
         </Show>
-        <p>
+        <p class=move || match message.get() {
+            Some(Err(_)) => "message error",
+            Some(Ok(_)) => "message ok",
+            None => "message",
+        }>
             {move || match message.get() {
                 None => String::new(),
                 Some(Ok(m)) => m,
@@ -378,7 +376,6 @@ pub fn Wizard(
 /// Fit results: per cell and per case.
 #[component]
 fn Results(run: RwSignal<Run>, fit: Memo<Option<Result<CellFit, FitError>>>) -> impl IntoView {
-    let cell_style = "text-align: right; font-family: monospace; padding: 0 1em";
     move || {
         let fit = match fit.get() {
             Some(Ok(fit)) => fit,
@@ -393,8 +390,12 @@ fn Results(run: RwSignal<Run>, fit: Memo<Option<Result<CellFit, FitError>>>) -> 
                          or a weight on the wrong mount?)"
                     ),
                 };
-                return view! { <p>{format!("The fit failed: {text}. Use Back to redo captures.")}</p> }
-                    .into_any();
+                return view! {
+                    <p class="message error">
+                        {format!("The fit failed: {text}. Use Back to redo captures.")}
+                    </p>
+                }
+                .into_any();
             }
             None => return ().into_any(),
         };
@@ -411,10 +412,10 @@ fn Results(run: RwSignal<Run>, fit: Memo<Option<Result<CellFit, FitError>>>) -> 
                 view! {
                     <tr>
                         <td>{format!("Cell {i}")}</td>
-                        <td style=cell_style>{format!("{:.4e}", fit.scales[i])}</td>
-                        <td style=cell_style>{format!("{:.4}", fit.scales[i] / K_NOMINAL_N_PER_COUNT)}</td>
-                        <td style=cell_style>{format!("{:.1}", fit.rms_residual_n[i] * 1e3)}</td>
-                        <td style=cell_style>
+                        <td class="num">{format!("{:.4e}", fit.scales[i])}</td>
+                        <td class="num">{format!("{:.4}", fit.scales[i] / K_NOMINAL_N_PER_COUNT)}</td>
+                        <td class="num">{format!("{:.1}", fit.rms_residual_n[i] * 1e3)}</td>
+                        <td class="num">
                             {format!("{drift_counts:.0} ({:.1} mN)", drift_counts * fit.scales[i] * 1e3)}
                         </td>
                     </tr>
@@ -455,21 +456,22 @@ fn Results(run: RwSignal<Run>, fit: Memo<Option<Result<CellFit, FitError>>>) -> 
                 view! {
                     <tr>
                         <td>{mount_list(mounts)}</td>
-                        <td style=cell_style>{text.0}</td>
-                        <td style=cell_style>{text.1}</td>
-                        <td style=cell_style>{text.2}</td>
+                        <td class="num">{text.0}</td>
+                        <td class="num">{text.1}</td>
+                        <td class="num">{text.2}</td>
                     </tr>
                 }
             })
             .collect_view();
 
         view! {
-            <p>{format!(
+            <p class="hint">{format!(
                 "Fitted from {} cases with {:.1} g per weight (g = {STANDARD_GRAVITY} m/s\u{b2}).",
                 r.cases.len(),
                 r.mass_kg * 1000.0
             )}</p>
-            <table>
+            <div class="scroll-x">
+            <table class="data">
                 <tr>
                     <th></th>
                     <th>"scale (N/count)"</th>
@@ -479,8 +481,10 @@ fn Results(run: RwSignal<Run>, fit: Memo<Option<Result<CellFit, FitError>>>) -> 
                 </tr>
                 {cells}
             </table>
-            <p>"Each case measured with the new calibration:"</p>
-            <table>
+            </div>
+            <p class="hint">"Each case measured with the new calibration:"</p>
+            <div class="scroll-x">
+            <table class="data">
                 <tr>
                     <th>"weights on"</th>
                     <th>"mass (g)"</th>
@@ -489,6 +493,7 @@ fn Results(run: RwSignal<Run>, fit: Memo<Option<Result<CellFit, FitError>>>) -> 
                 </tr>
                 {case_rows}
             </table>
+            </div>
         }
         .into_any()
     }

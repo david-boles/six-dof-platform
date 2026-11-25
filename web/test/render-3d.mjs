@@ -9,6 +9,9 @@
 //   printed; the screenshot is taken after the last sample.
 // Needs Node 22+ (built-in WebSocket) and Mesa (apk add mesa-dri-gallium
 // mesa-egl mesa-gles mesa-gbm).
+// PREFERS_COLOR_SCHEME=dark (or light) emulates the browser's theme preference.
+// SCREENSHOT_EACH=1 also saves a screenshot at every sample time, as
+// <out without .png>-<ms>.png (e.g. to follow an animation).
 import { spawn } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 
@@ -67,6 +70,15 @@ try {
       pending.get(msg.id)(msg);
       pending.delete(msg.id);
     }
+    // Print the page's console errors and uncaught exceptions (e.g. a panic or a
+    // shader that fails to compile).
+    if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") {
+      const text = msg.params.args.map((a) => a.value ?? a.description ?? "").join(" ");
+      console.log("console.error:", text.slice(0, 2000));
+    }
+    if (msg.method === "Runtime.exceptionThrown") {
+      console.log("exception:", JSON.stringify(msg.params.exceptionDetails).slice(0, 2000));
+    }
   });
   const send = (method, params = {}) =>
     new Promise((resolve) => {
@@ -76,12 +88,23 @@ try {
     });
 
   await send("Page.enable");
+  await send("Runtime.enable");
+  if (process.env.PREFERS_COLOR_SCHEME) {
+    await send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: process.env.PREFERS_COLOR_SCHEME }],
+    });
+  }
   await send("Page.navigate", { url });
   const start = Date.now();
   for (const t of samples) {
     await sleep(Math.max(0, t - (Date.now() - start)));
     const r = await send("Runtime.evaluate", { expression, returnByValue: true });
     console.log(`@${t} ms:`, JSON.stringify(r.result?.result?.value));
+    if (process.env.SCREENSHOT_EACH) {
+      const shot = await send("Page.captureScreenshot", { format: "png" });
+      const file = out.replace(/\.png$/, "") + `-${t}.png`;
+      writeFileSync(file, Buffer.from(shot.result.data, "base64"));
+    }
   }
   const shot = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(out, Buffer.from(shot.result.data, "base64"));

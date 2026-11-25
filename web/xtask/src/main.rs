@@ -27,6 +27,8 @@ use wasm_bindgen_cli_support::Bindgen;
 mod model;
 
 const APP_PACKAGE: &str = "six-dof-platform-web";
+/// The UI's stylesheet (relative to the web workspace).
+const STYLESHEET: &str = "app/style.css";
 /// CAD exports for the 3D view (relative to the web workspace), and the global
 /// JavaScript variable each is embedded as.
 const MODELS: [(&str, &str); 2] = [
@@ -92,6 +94,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // 3. The 3D models. Embedded as a script that runs before the app, as
     //    `window.SIX_DOF_MODEL` etc. (bytes); the app reads them from there, so the
     //    wasm doesn't have to contain them and the app also builds without them.
+    // The stylesheet, inlined into <head>.
+    let css = fs::read_to_string(workspace.join(STYLESHEET))?;
+    if css.contains("</style") {
+        return Err("style.css contains `</style`, which would break inlining".into());
+    }
+
     let mut models_js = String::new();
     let mut models_size = 0;
     for (path, variable) in MODELS {
@@ -119,6 +127,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Six-DOF test stand</title>
+<style>
+{css}</style>
 </head>
 <body>
 <script>

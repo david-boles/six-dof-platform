@@ -44,6 +44,9 @@ web-sys = { version = "0.3", features = [
     "WebGl2RenderingContext",
     "MouseEvent",
     "WheelEvent",
+    "CssStyleDeclaration",
+    # Theme (main.rs): the browser's light/dark preference.
+    "MediaQueryList",
 ] }
 # 3D view: three-d's renderer on a WebGL2 context we create ourselves from the
 # canvas (so no `window` feature, which would bring winit). three-d 0.19 uses glow

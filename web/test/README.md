@@ -39,7 +39,8 @@ counts and how many live frames were sent.
 
 Defined at the top of `../mockgen/src/main.rs`. After the stream ends (about 4 s):
 
-- Status line: `Connected: device 0000123456789abc, sample period 4000 µs`.
+- Header: badges "Connected" and "ADC OK" (later "ADC stopped: reset the device"),
+  status line `Connected: device 0000123456789abc, sample period 4000 µs`.
 - Statistics: received 997, missed 3, skipped 0 queued from before connecting;
   rate about 250 Hz while streaming. (The 16 backlog readings arrive before the UI
   subscribes, because it checks the interface hash first; the postcard-rpc client
@@ -117,8 +118,16 @@ Viewing the PNGs with the agent's read tool currently aborts (TODO 3.1.1), so
 compare screenshots with `pngdiff.py` instead (count, bounding box and colors of
 the differing pixels).
 
+Since the restyle (2026-11-25) the 3D view has its own pane (right half of a wide
+window, top half of a tall one), so a whole-window screenshot contains it; check
+the layout itself by evaluating element positions (`getBoundingClientRect` of
+`.panel`, `.viewer`, `.viewer canvas`) as the expression. `PREFERS_COLOR_SCHEME=dark`
+emulates the browser's theme. Older test pages also hid everything but the canvas
+with `body > :not(canvas)`; with the new structure use `.panel { display: none }` and
+`.app { grid-template-columns: 0 1fr }` instead if a canvas-only image is needed.
+
 `/tmp/test-3d.html` is a copy of `dist/six-dof.html` with, before `</body>`: a
-style hiding everything but the canvas (`body > :not(canvas) { display: none }`),
+style as described above,
 optionally `localStorage.setItem('six-dof-platform.reference-point', '[50, 0, 0]')`,
 the two fake-device scripts, and a `setTimeout` that clicks Connect after 1 s.
 Expected (1 kg at the center): the whole stand in view; load cells slightly blue

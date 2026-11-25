@@ -267,6 +267,24 @@ fn App() -> impl IntoView {
     let device_calibration = RwSignal::new(None::<DeviceCalibration>);
     let log = RwSignal::new(Vec::<String>::new());
 
+    // Theme: follows the browser's preference at launch; the header's toggle
+    // overrides it until the page is reloaded (David). style.css styles
+    // `<html data-theme="light|dark">`.
+    let dark = RwSignal::new(
+        web_sys::window()
+            .and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten())
+            .is_some_and(|m| m.matches()),
+    );
+    Effect::new(move || {
+        let theme = if dark.get() { "dark" } else { "light" };
+        if let Some(root) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.document_element())
+        {
+            let _ = root.set_attribute("data-theme", theme);
+        }
+    });
+
     // Kept in the browser (storage.rs).
     let saved = RwSignal::new(None::<SavedCalibration>);
     // Result of the last calibration/zero action (Ok = info, Err = error).
@@ -494,57 +512,80 @@ fn App() -> impl IntoView {
     };
 
     view! {
-        <h1>"Six-DOF test stand"</h1>
-        <p>
-            <button on:click=on_connect disabled=move || connected() || status.get() == Status::Connecting>
-                "Connect"
+        <div class="app">
+        <main class="panel">
+        <header class="topbar">
+            <h1>"Six-DOF test stand"</h1>
+            <button class="quiet" on:click=move |_| dark.update(|d| *d = !*d)>
+                {move || if dark.get() { "Light mode" } else { "Dark mode" }}
             </button>
-            " "
-            <button on:click=on_disconnect disabled=move || !connected()>"Disconnect"</button>
-            " "
+            <div class="connection">
+                <button
+                    class="primary"
+                    on:click=on_connect
+                    disabled=move || connected() || status.get() == Status::Connecting
+                >
+                    "Connect"
+                </button>
+                <button on:click=on_disconnect disabled=move || !connected()>"Disconnect"</button>
+                {move || {
+                    let (class, text) = match status.get() {
+                        Status::Disconnected => ("badge", "Disconnected"),
+                        Status::Connecting => ("badge warn", "Connecting…"),
+                        Status::Connected(_) => ("badge ok", "Connected"),
+                        Status::Failed(_) => ("badge error", "Error"),
+                    };
+                    view! { <span class=class>{text}</span> }
+                }}
+                {move || {
+                    let (class, text) = match adc_status.get() {
+                        None => ("badge", "ADC –"),
+                        Some(AdcStatus::Ok) => ("badge ok", "ADC OK"),
+                        Some(AdcStatus::Errored) => ("badge warn", "ADC errors (see log)"),
+                        Some(AdcStatus::Terminated) => ("badge error", "ADC stopped: reset the device"),
+                    };
+                    view! { <span class=class>{text}</span> }
+                }}
+            </div>
             {move || match status.get() {
-                Status::Disconnected => "Disconnected".to_string(),
-                Status::Connecting => "Connecting...".to_string(),
-                Status::Connected(info) => format!(
-                    "Connected: device {:016x}, sample period {} µs",
-                    info.unique_id, info.sample_period_us,
-                ),
-                Status::Failed(e) => format!("Error: {e}"),
+                Status::Connected(info) => view! {
+                    <div class="status-line">
+                        {format!(
+                            "Connected: device {:016x}, sample period {} µs",
+                            info.unique_id, info.sample_period_us,
+                        )}
+                    </div>
+                }
+                    .into_any(),
+                Status::Failed(e) => view! {
+                    <div class="status-line message error">{format!("Error: {e}")}</div>
+                }
+                    .into_any(),
+                _ => ().into_any(),
             }}
-        </p>
+        </header>
 
-        <p>
-            "ADC status: "
-            {move || match adc_status.get() {
-                None => "-",
-                Some(AdcStatus::Ok) => "OK",
-                Some(AdcStatus::Errored) => "errors occurred, sampling continues (see device log)",
-                Some(AdcStatus::Terminated) => "terminated after too many errors; reset the device",
-            }}
-        </p>
-
-        <h2>"Raw readings (ADC counts)"</h2>
-        <table>
-            <tr>
-                {(0..CHANNELS).map(|i| view! { <th>{format!("Cell {i}")}</th> }).collect_view()}
-            </tr>
-            <tr>
-                {(0..CHANNELS)
-                    .map(|i| {
-                        view! {
-                            <td style="text-align: right; font-family: monospace; padding: 0 1em">
+        <section class="card">
+        <h2>"Raw readings" <span class="unit">"ADC counts"</span></h2>
+        <div class="tiles">
+            {(0..CHANNELS)
+                .map(|i| {
+                    view! {
+                        <div class="tile">
+                            <span class="label">{format!("Cell {i}")}</span>
+                            <span class="value">
                                 {move || {
                                     readings
                                         .with(|r| r.latest.as_ref().map(|l| l.raw[i].to_string()))
-                                        .unwrap_or_else(|| "-".into())
+                                        .unwrap_or_else(|| "–".into())
                                 }}
-                            </td>
-                        }
-                    })
-                    .collect_view()}
-            </tr>
-        </table>
-        <p>
+                            </span>
+                        </div>
+                    }
+                })
+                .collect_view()}
+        </div>
+        <div class="stats">
             {move || {
                 readings
                     .with(|r| {
@@ -562,56 +603,21 @@ fn App() -> impl IntoView {
                         )
                     })
             }}
+        </div>
+        </section>
+
+        <section class="card">
+        <h2>"Zero"</h2>
+        <p class="hint">
+            "Average the empty platform, then use the mean as zero. Zeroing subtracts the \
+             offsets in the device's wrench calculation; the raw counts stay raw."
         </p>
-        <p>
+        <div class="row">
             <button on:click=on_average disabled=move || !connected() || averaging.get()>
                 {format!("Average {:.0} s", AVERAGE_DURATION_MS as f64 / 1000.0)}
             </button>
-            " "
-            {move || match average.get() {
-                _ if averaging.get() => "averaging...".to_string(),
-                None => String::new(),
-                Some(Ok(a)) => format!("{} readings", a.n),
-                Some(Err(e)) => format!("Error: {e}"),
-            }}
-        </p>
-        {move || {
-            average
-                .get()
-                .and_then(Result::ok)
-                .map(|a| {
-                    let row = |label: &'static str, values: [f32; CHANNELS], decimals: usize| {
-                        view! {
-                            <tr>
-                                <th style="text-align: left">{label}</th>
-                                {values
-                                    .map(|v| {
-                                        view! {
-                                            <td style="text-align: right; font-family: monospace; padding: 0 1em">
-                                                {format!("{v:.decimals$}")}
-                                            </td>
-                                        }
-                                    })
-                                    .collect_view()}
-                            </tr>
-                        }
-                    };
-                    view! {
-                        <table>
-                            <tr>
-                                <th></th>
-                                {(0..CHANNELS)
-                                    .map(|i| view! { <th>{format!("Cell {i}")}</th> })
-                                    .collect_view()}
-                            </tr>
-                            {row("mean", a.mean, 1)}
-                            {row("std. dev.", a.std_dev, 2)}
-                        </table>
-                    }
-                })
-        }}
-        <p>
             <button
+                class="primary"
                 on:click=on_set_zero
                 disabled=move || {
                     !connected() || busy.get() || averaging.get()
@@ -620,19 +626,59 @@ fn App() -> impl IntoView {
             >
                 "Set the average as zero"
             </button>
-            " "
             <button on:click=on_clear_zero disabled=move || !connected() || busy.get()>
                 "Clear zero"
             </button>
-            " Zeroing subtracts the offsets in the device's wrench calculation; the raw \
-             counts above stay raw."
-        </p>
+            <span class=move || {
+                if matches!(average.get(), Some(Err(_))) { "message error" } else { "message" }
+            }>
+                {move || match average.get() {
+                    _ if averaging.get() => "averaging…".to_string(),
+                    None => String::new(),
+                    Some(Ok(a)) => format!("{} readings", a.n),
+                    Some(Err(e)) => format!("Error: {e}"),
+                }}
+            </span>
+        </div>
+        {move || {
+            average
+                .get()
+                .and_then(Result::ok)
+                .map(|a| {
+                    let row = |label: &'static str, values: [f32; CHANNELS], decimals: usize| {
+                        view! {
+                            <tr>
+                                <td>{label}</td>
+                                {values
+                                    .map(|v| view! { <td class="num">{format!("{v:.decimals$}")}</td> })
+                                    .collect_view()}
+                            </tr>
+                        }
+                    };
+                    view! {
+                        <div class="scroll-x">
+                            <table class="data">
+                                <tr>
+                                    <th>"counts"</th>
+                                    {(0..CHANNELS)
+                                        .map(|i| view! { <th>{format!("Cell {i}")}</th> })
+                                        .collect_view()}
+                                </tr>
+                                {row("mean", a.mean, 1)}
+                                {row("std. dev.", a.std_dev, 2)}
+                            </table>
+                        </div>
+                    }
+                })
+        }}
+        </section>
 
-        <h2>"Wrench"</h2>
-        <p>
+        <section class="card">
+        <h2>"Wrench" <span class="unit">"external load on the platform"</span></h2>
+        <p class="hint">
             {move || {
                 let [x, y, z] = reference_point.get();
-                format!("External load on the platform; torques about ({x}, {y}, {z}) mm. ")
+                format!("Torques about ({x}, {y}, {z}) mm. ")
             }}
             {move || match device_calibration.get() {
                 None => String::new(),
@@ -645,35 +691,13 @@ fn App() -> impl IntoView {
                 }
             }}
         </p>
-        <p>
-            "Reference point for torques (mm; origin = center of the top triangle, top \
-             surface of the platform): "
-            {["x", "y", "z"]
-                .into_iter()
-                .enumerate()
-                .map(|(axis, label)| {
-                    view! {
-                        {format!(" {label} ")}
-                        <input
-                            type="number"
-                            step="any"
-                            style="width: 6em"
-                            prop:value=move || reference_point.get()[axis].to_string()
-                            on:change=set_reference(axis)
-                        />
-                    }
-                })
-                .collect_view()}
-        </p>
-        <table>
-            <tr>
-                {WRENCH_LABELS.map(|label| view! { <th>{label}</th> }).collect_view()}
-            </tr>
-            <tr>
+        <div class="tiles">
                 {(0..WRENCH_LEN)
                     .map(|i| {
                         view! {
-                            <td style="text-align: right; font-family: monospace; padding: 0 1em">
+                            <div class=if i < 3 { "tile force" } else { "tile torque" }>
+                            <span class="label">{WRENCH_LABELS[i]}</span>
+                            <span class="value">
                                 {move || {
                                     let point = reference_point.get();
                                     readings
@@ -688,149 +712,184 @@ fn App() -> impl IntoView {
                                                 }
                                             })
                                         })
-                                        .unwrap_or_else(|| "-".into())
+                                        .unwrap_or_else(|| "–".into())
                                 }}
-                            </td>
+                            </span>
+                            </div>
                         }
                     })
                     .collect_view()}
-            </tr>
-        </table>
-
-        <h2>"3D view"</h2>
-        <view3d::View3d
-            wrench={
-                let accum = accum.clone();
-                move || {
-                    let accum = accum.borrow();
-                    if center_of_mass_mode.get_untracked() {
-                        accum.view.smoothed_wrench
-                    } else {
-                        accum.view.latest_wrench.as_ref().map(|w| w.values)
+        </div>
+        <div class="row">
+            <span class="hint">"Reference point (mm):"</span>
+            {["x", "y", "z"]
+                .into_iter()
+                .enumerate()
+                .map(|(axis, label)| {
+                    view! {
+                        <label class="inline">
+                            {label}
+                            <input
+                                type="number"
+                                step="any"
+                                prop:value=move || reference_point.get()[axis].to_string()
+                                on:change=set_reference(axis)
+                            />
+                        </label>
                     }
-                }
-            }
-            inputs=view3d::ViewInputs {
-                reference_point,
-                weights,
-                center_of_mass_mode,
-            }
-        />
+                })
+                .collect_view()}
+        </div>
+        <p class="hint">
+            "Origin = center of the top triangle, on the top surface of the platform; z up."
+        </p>
+        </section>
 
+        <section class="card">
         <h2>"Center of mass"</h2>
-        <p style="max-width: 900px">
-            <label>
-                <input
-                    type="checkbox"
-                    prop:checked=move || center_of_mass_mode.get()
-                    on:change=move |ev| center_of_mass_mode.set(event_target_checked(&ev))
-                />
-                " Show the center of mass of what rests on the platform"
-            </label>
+        <label class="inline">
+            <input
+                type="checkbox"
+                prop:checked=move || center_of_mass_mode.get()
+                on:change=move |ev| center_of_mass_mode.set(event_target_checked(&ev))
+            />
+            "Show the center of mass of what rests on the platform"
+        </label>
+        <p class="hint">
             {format!(
-                " (zero the empty platform first). Assumes the only load is its weight; the \
-                 3D arrows move to the center of mass and the values are smoothed with a \
-                 time constant of {SMOOTHING_TIME_S} s."
+                "Zero the empty platform first. Assumes the only load is the object's weight. \
+                 The 3D arrows move to the center of mass; values are smoothed with a time \
+                 constant of {SMOOTHING_TIME_S} s."
             )}
         </p>
         <Show when=move || center_of_mass_mode.get()>
-            <p style="font-family: monospace">
-                {move || {
-                    let zeroed = device_calibration.with(|d| d.is_some_and(|d| d.is_zeroed()));
-                    let warning = if zeroed { "" } else { " (not zeroed!)" };
-                    readings
-                        .with(|r| r.smoothed_wrench)
-                        .map(|w| match center_of_mass(&w, view3d::MIN_COM_WEIGHT_N) {
-                            Some(com) => format!(
-                                "mass {:.1} g, x {:.1} mm, y {:.1} mm{warning}; check (should be \
-                                 about 0): horizontal force {:.3} N, Mz {:.4} N·m",
-                                com.mass_kg * 1000.0,
-                                // `+ 0.0` turns −0.0 into 0.0 (no "−0.0" shown).
-                                com.position_mm[0] + 0.0,
-                                com.position_mm[1] + 0.0,
-                                w[0].hypot(w[1]),
-                                w[5] + 0.0,
-                            ),
-                            None => format!(
-                                "nothing heavier than {:.0} g on the platform{warning}",
-                                view3d::MIN_COM_WEIGHT_N / STANDARD_GRAVITY * 1000.0
-                            ),
-                        })
-                        .unwrap_or_else(|| "not connected".into())
-                }}
-            </p>
+            {move || {
+                let zeroed = device_calibration.with(|d| d.is_some_and(|d| d.is_zeroed()));
+                let warning = (!zeroed)
+                    .then(|| view! { <p class="message error">"Not zeroed: zero the empty platform first."</p> });
+                let body = match readings.with(|r| r.smoothed_wrench) {
+                    None => view! { <p class="hint">"Not connected."</p> }.into_any(),
+                    Some(w) => match center_of_mass(&w, view3d::MIN_COM_WEIGHT_N) {
+                        // `+ 0.0` turns −0.0 into 0.0 (no "−0.0" shown).
+                        Some(com) => view! {
+                            <div class="tiles">
+                                <div class="tile big">
+                                    <span class="label">"mass (g)"</span>
+                                    <span class="value">{format!("{:.1}", com.mass_kg * 1000.0)}</span>
+                                </div>
+                                <div class="tile big">
+                                    <span class="label">"x (mm)"</span>
+                                    <span class="value">{format!("{:.1}", com.position_mm[0] + 0.0)}</span>
+                                </div>
+                                <div class="tile big">
+                                    <span class="label">"y (mm)"</span>
+                                    <span class="value">{format!("{:.1}", com.position_mm[1] + 0.0)}</span>
+                                </div>
+                            </div>
+                            <p class="stats">
+                                {format!(
+                                    "Check (about 0 for a resting object): horizontal force \
+                                     {:.3} N, Mz {:.4} N·m",
+                                    w[0].hypot(w[1]),
+                                    w[5] + 0.0,
+                                )}
+                            </p>
+                        }
+                            .into_any(),
+                        None => view! {
+                            <p class="hint">
+                                {format!(
+                                    "Nothing heavier than {:.0} g on the platform.",
+                                    view3d::MIN_COM_WEIGHT_N / STANDARD_GRAVITY * 1000.0
+                                )}
+                            </p>
+                        }
+                            .into_any(),
+                    },
+                };
+                view! { {warning} {body} }
+            }}
         </Show>
+        </section>
 
+        <section class="card">
         <h2>"Calibration"</h2>
         <Show when=offer_apply>
-            <p style="background: #ffd; padding: 0.5em">
-                {move || {
-                    saved
-                        .get()
-                        .map(|s| {
-                            format!(
-                                "This browser has a saved calibration ({}{}) that the device \
-                                 isn't using. Apply it? ",
-                                s.saved_at,
-                                if s.note.is_empty() { String::new() } else { format!(": {}", s.note) },
-                            )
-                        })
-                }}
-                <button on:click=on_apply_saved disabled=move || busy.get()>"Apply"</button>
-                " "
+            <div class="notice offer row">
+                <span>
+                    {move || {
+                        saved
+                            .get()
+                            .map(|s| {
+                                format!(
+                                    "This browser has a saved calibration ({}{}) that the \
+                                     device isn't using. Apply it?",
+                                    s.saved_at,
+                                    if s.note.is_empty() { String::new() } else { format!(": {}", s.note) },
+                                )
+                            })
+                    }}
+                </span>
+                <button class="primary" on:click=on_apply_saved disabled=move || busy.get()>
+                    "Apply"
+                </button>
                 <button on:click=move |_| offer_dismissed.set(true)>"Not now"</button>
-            </p>
+            </div>
         </Show>
-        <p>
-            "Device: "
-            {move || match device_calibration.get() {
-                None => "not connected".to_string(),
-                Some(d) => saved.with(|s| d.matrix_label(s.as_ref())).to_string(),
-            }}
-            ". The device keeps it only until it's reset."
-        </p>
-        <p>
-            "Saved in this browser: "
-            {move || match saved.get() {
-                None => "none".to_string(),
-                Some(s) if s.note.is_empty() => format!("saved {}", s.saved_at),
-                Some(s) => format!("saved {}: {}", s.saved_at, s.note),
-            }}
-        </p>
-        <p>
+        <dl class="facts">
+            <dt>"Device:"</dt>
+            <dd>
+                {move || match device_calibration.get() {
+                    None => "not connected".to_string(),
+                    Some(d) => saved.with(|s| d.matrix_label(s.as_ref())).to_string(),
+                }}
+                <span class="hint">" (kept until the device is reset)"</span>
+            </dd>
+            <dt>"Saved in this browser:"</dt>
+            <dd>
+                {move || match saved.get() {
+                    None => "none".to_string(),
+                    Some(s) if s.note.is_empty() => format!("saved {}", s.saved_at),
+                    Some(s) => format!("saved {}: {}", s.saved_at, s.note),
+                }}
+            </dd>
+        </dl>
+        <div class="row">
             <button
                 on:click=on_apply_saved
                 disabled=move || !connected() || busy.get() || saved.with(Option::is_none)
             >
                 "Apply the saved calibration to the device"
             </button>
-            " "
             <button on:click=on_reset_nominal disabled=move || !connected() || busy.get()>
                 "Reset the device to nominal"
             </button>
-        </p>
-        <p>
-            "Note: "
+        </div>
+        <div class="row">
             <input
                 type="text"
-                style="width: 20em"
-                placeholder="e.g. how it was made"
+                placeholder="Note, e.g. how it was made"
                 prop:value=move || note.get()
                 on:input=move |ev| note.set(event_target_value(&ev))
             />
-            " "
             <button on:click=on_save disabled=move || device_calibration.with(Option::is_none)>
                 "Save the device's calibration in this browser"
             </button>
-        </p>
-        <p>
+        </div>
+        <div class="row">
             <button on:click=on_export disabled=move || saved.with(Option::is_none)>
                 "Export the saved calibration (JSON)"
             </button>
-            " Import (replaces the saved one): "
-            <input type="file" accept=".json,application/json" on:change=on_import />
-        </p>
-        <p>
+            <label class="inline">
+                <span class="hint">"Import (replaces the saved one):"</span>
+                <input type="file" accept=".json,application/json" on:change=on_import />
+            </label>
+        </div>
+        <p class=move || match calibration_message.get() {
+            Some(Err(_)) => "message error",
+            Some(Ok(_)) => "message ok",
+            None => "message",
+        }>
             {move || match calibration_message.get() {
                 None => String::new(),
                 Some(Ok(m)) => m,
@@ -844,13 +903,44 @@ fn App() -> impl IntoView {
             device_calibration=device_calibration
             saved=saved
         />
+        </section>
 
+        <section class="card">
         <h2>"Device log"</h2>
-        <ul>
+        <ul class="log">
             {move || {
-                log.get().into_iter().rev().map(|e| view! { <li>{e}</li> }).collect_view()
+                let lines = log.get();
+                if lines.is_empty() {
+                    view! { <li class="hint">"No messages."</li> }.into_any()
+                } else {
+                    lines.into_iter().rev().map(|e| view! { <li>{e}</li> }).collect_view().into_any()
+                }
             }}
         </ul>
+        </section>
+        </main>
+
+        <aside class="viewer">
+            <view3d::View3d
+                wrench={
+                    let accum = accum.clone();
+                    move || {
+                        let accum = accum.borrow();
+                        if center_of_mass_mode.get_untracked() {
+                            accum.view.smoothed_wrench
+                        } else {
+                            accum.view.latest_wrench.as_ref().map(|w| w.values)
+                        }
+                    }
+                }
+                inputs=view3d::ViewInputs {
+                    reference_point,
+                    weights,
+                    center_of_mass_mode,
+                }
+            />
+        </aside>
+        </div>
     }
 }
 
