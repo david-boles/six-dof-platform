@@ -16,6 +16,7 @@
     opens: 0,
     closes: 0,
     liveSent: 0, // live frames delivered so far
+    sequenceIndex: {}, // per request key: last `sequence` element used
   });
 
   const fromHex = (s) => Uint8Array.from(s.match(/../g) || [], (h) => parseInt(h, 16));
@@ -135,7 +136,13 @@
       const known = MOCK.endpoints[key];
       state.requests.push(known ? known.path : "?" + key);
       // Unknown keys get a `WireError::UnknownKey` reply, like from the real server.
-      const reply = known || MOCK.unknownKey;
+      let reply = known || MOCK.unknownKey;
+      // An entry with a `sequence` of bodies answers with the next one each time
+      // (the last one repeats).
+      if (known && known.sequence) {
+        const i = (state.sequenceIndex[key] = (state.sequenceIndex[key] ?? -1) + 1);
+        reply = { ...known, body: known.sequence[Math.min(i, known.sequence.length - 1)] };
+      }
       // Reply header: 8-byte key (0b11 key bits), same sequence number length.
       const header = [0b1100_0000 | (disc & 0b0011_0000), ...fromHex(reply.key), ...seq];
       const frame = cobsEncode([...header, ...fromHex(reply.body)]);

@@ -4,8 +4,8 @@
 //! 1. `cargo build -p six-dof-platform-web --target wasm32-unknown-unknown [--release]`.
 //! 2. Run wasm-bindgen (as a library, so no separately installed CLI is needed) to
 //!    generate the JS glue that loads the wasm and connects it to browser APIs.
-//! 3. Convert the CAD model (`assets/platform.gltf`) into the compact format the 3D
-//!    view reads (`model.rs`).
+//! 3. Convert the CAD models (`assets/platform.gltf`, `assets/calibration_weight.gltf`)
+//!    into the compact format the 3D view reads (`model.rs`).
 //! 4. Inline the JS, the base64-encoded wasm and the model into a single HTML page:
 //!    `dist/six-dof.html`. It can be opened straight from disk (`file://`), which
 //!    Chromium treats as a secure context, so Web Serial is available.
@@ -27,8 +27,12 @@ use wasm_bindgen_cli_support::Bindgen;
 mod model;
 
 const APP_PACKAGE: &str = "six-dof-platform-web";
-/// CAD export for the 3D view (relative to the web workspace).
-const MODEL: &str = "assets/platform.gltf";
+/// CAD exports for the 3D view (relative to the web workspace), and the global
+/// JavaScript variable each is embedded as.
+const MODELS: [(&str, &str); 2] = [
+    ("assets/platform.gltf", "SIX_DOF_MODEL"),
+    ("assets/calibration_weight.gltf", "SIX_DOF_WEIGHT_MODEL"),
+];
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 const OUTPUT: &str = "dist/six-dof.html";
 
@@ -85,11 +89,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let js = output.js().to_owned();
     let wasm = output.wasm_mut().emit_wasm();
 
-    // 3. The 3D model. Embedded as its own script that runs before the app, as
-    //    `window.SIX_DOF_MODEL` (bytes); the app reads it from there, so the wasm
-    //    doesn't have to contain it and the app also builds without it.
-    let model = model::convert(&workspace.join(MODEL))?;
-    let model_b64 = base64::engine::general_purpose::STANDARD.encode(&model);
+    // 3. The 3D models. Embedded as a script that runs before the app, as
+    //    `window.SIX_DOF_MODEL` etc. (bytes); the app reads them from there, so the
+    //    wasm doesn't have to contain them and the app also builds without them.
+    let mut models_js = String::new();
+    let mut models_size = 0;
+    for (path, variable) in MODELS {
+        let model = model::convert(&workspace.join(path))?;
+        models_size += model.len();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&model);
+        models_js.push_str(&format!(
+            "window.{variable} = Uint8Array.from(atob(\"{b64}\"), (c) => c.charCodeAt(0));\n"
+        ));
+    }
 
     // 4. Inline everything. The JS glue declares `__wbg_init` (its default export);
     //    since it's inlined into the same module script, we can call it by name.
@@ -110,8 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 </head>
 <body>
 <script>
-window.SIX_DOF_MODEL = Uint8Array.from(atob("{model_b64}"), (c) => c.charCodeAt(0));
-</script>
+{models_js}</script>
 <script type="module">
 {js}
 const wasmBase64 = "{wasm_b64}";
@@ -127,11 +138,11 @@ await __wbg_init({{ module_or_path: wasmBytes }});
     fs::create_dir_all(out_path.parent().ok_or("bad output path")?)?;
     fs::write(&out_path, &html)?;
     println!(
-        "wrote {} ({} KiB; wasm {} KiB, model {} KiB)",
+        "wrote {} ({} KiB; wasm {} KiB, models {} KiB)",
         out_path.display(),
         html.len() / 1024,
         wasm.len() / 1024,
-        model.len() / 1024
+        models_size / 1024
     );
     Ok(())
 }

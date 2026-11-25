@@ -242,6 +242,34 @@ pub fn wrench_about(wrench: &[f32; 6], point_mm: Vec3) -> [f32; 6] {
     ]
 }
 
+/// Where a resting object's weight acts, from the wrench about the origin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CenterOfMass {
+    /// x, y in mm (the line of action of the weight; its height can't be measured
+    /// with a vertical load).
+    pub position_mm: [f64; 2],
+    /// −Fz / g.
+    pub mass_kg: f64,
+}
+
+/// The center of mass (x, y) and mass of what rests on the platform, assuming
+/// the load is its weight only (vertical): a downward force Fz at (x, y) has
+/// torque (y·Fz, −x·Fz, 0) about the origin, so x = −My/Fz, y = Mx/Fz.
+/// `None` unless Fz is below −`min_weight_n` (nothing there, or pulling up).
+pub fn center_of_mass(wrench: &[f32; 6], min_weight_n: f64) -> Option<CenterOfMass> {
+    let fz = f64::from(wrench[2]);
+    if fz > -min_weight_n {
+        return None;
+    }
+    Some(CenterOfMass {
+        position_mm: [
+            -f64::from(wrench[4]) / fz * 1e3,
+            f64::from(wrench[3]) / fz * 1e3,
+        ],
+        mass_kg: -fz / STANDARD_GRAVITY,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Small linear algebra helpers
 // ---------------------------------------------------------------------------
@@ -476,6 +504,28 @@ mod tests {
         let w = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         let moved = wrench_about(&w, [0.0, 0.0, 100.0]);
         assert!((moved[4] + 0.1).abs() < 1e-7 && moved[3] == 0.0 && moved[5] == 0.0);
+    }
+
+    #[test]
+    fn center_of_mass_of_weights() {
+        for mount in MOUNTS {
+            let w = weight_wrench(mount, 0.5).map(|v| v as f32);
+            let com = center_of_mass(&w, 0.1).unwrap();
+            assert!((com.mass_kg - 0.5).abs() < 1e-6);
+            for k in 0..2 {
+                assert!((com.position_mm[k] - mount[k]).abs() < 1e-3, "{mount:?}");
+            }
+        }
+        // Two equal weights: halfway between.
+        let a = weight_wrench(MOUNTS[0], 1.0);
+        let b = weight_wrench(MOUNTS[3], 1.0);
+        let both: [f32; 6] = core::array::from_fn(|i| (a[i] + b[i]) as f32);
+        let com = center_of_mass(&both, 0.1).unwrap();
+        assert!(com.position_mm.iter().all(|v| v.abs() < 1e-3));
+        assert!((com.mass_kg - 2.0).abs() < 1e-6);
+        // Nothing (or an upward force): no answer.
+        assert_eq!(center_of_mass(&[0.0, 0.0, -0.05, 0.0, 0.0, 0.0], 0.1), None);
+        assert_eq!(center_of_mass(&[0.0, 0.0, 5.0, 0.0, 0.0, 0.0], 0.1), None);
     }
 
     #[test]

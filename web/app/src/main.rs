@@ -8,6 +8,7 @@ mod model_format;
 mod serial;
 mod storage;
 mod view3d;
+mod wizard;
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -17,7 +18,7 @@ use postcard_rpc::{
     standard_icd::{LoggingTopic, WireError},
 };
 use six_dof_platform_common::{
-    geometry::{DEFAULT_C, wrench_about},
+    geometry::{DEFAULT_C, STANDARD_GRAVITY, center_of_mass, wrench_about},
     interface::{
         AVERAGE_DURATION_MS, AdcStatus, AdcStatusTopic, AverageCounts, AverageEndpoint,
         AverageError, CHANNELS, CalibrationMatrix, DeviceInfo, GetAdcStatusEndpoint,
@@ -42,6 +43,10 @@ fn main() {
 const DISPLAY_PERIOD: Duration = Duration::from_millis(100);
 /// Number of device log messages kept on screen.
 const LOG_LEN: usize = 50;
+/// Time constant of the smoothed wrench (center-of-mass mode), s.
+/// 0.05 s: settles to 95 % in about 0.15 s (David found 0.5 s and 0.1 s too
+/// sluggish).
+const SMOOTHING_TIME_S: f32 = 0.05;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Status {
@@ -118,6 +123,21 @@ fn run_action<F, Fut>(
     });
 }
 
+/// The device's 1 s average of the raw counts (`average`).
+async fn request_average(client: &Client) -> Result<AverageCounts, String> {
+    match client.send_resp::<AverageEndpoint>(&()).await {
+        Ok(Ok(counts)) => Ok(counts),
+        Ok(Err(AverageError::AdcError)) => {
+            Err("an ADC error occurred while averaging (see device log)".into())
+        }
+        Ok(Err(AverageError::Timeout)) => {
+            Err("not enough readings arrived (is sampling running?)".into())
+        }
+        Err(HostErr::Wire(WireError::FailedToSpawn)) => Err("an average is already running".into()),
+        Err(e) => Err(format!("average request failed: {e:?}")),
+    }
+}
+
 /// Sends a new calibration matrix.
 async fn set_matrix(client: &Client, matrix: CalibrationMatrix) -> Result<(), String> {
     set_result(client.send_resp::<SetCalibrationEndpoint>(&matrix).await)
@@ -151,6 +171,9 @@ const WRENCH_LABELS: [&str; WRENCH_LEN] = [
 struct ReadingsView {
     latest: Option<Readings>,
     latest_wrench: Option<Wrench>,
+    /// The wrench through an exponential moving average (`SMOOTHING_TIME_S`),
+    /// for the center-of-mass mode.
+    smoothed_wrench: Option<[f32; WRENCH_LEN]>,
     received: u64,
     /// Readings taken before we connected (queued on the device while nobody was
     /// reading the port, sent first): skipped, so their gap isn't counted as missed.
@@ -202,9 +225,23 @@ impl ReadingsAccum {
     }
 
     fn push_wrench(&mut self, w: Wrench) {
-        if w.timestamp_us >= self.connected_at_us {
-            self.view.latest_wrench = Some(w);
+        if w.timestamp_us < self.connected_at_us {
+            return;
         }
+        // Exponential moving average: each new value moves the average by the
+        // fraction 1 − e^(−dt/τ) towards it (τ = SMOOTHING_TIME_S), so older values
+        // fade out with time constant τ regardless of gaps.
+        self.view.smoothed_wrench = Some(
+            match (&self.view.latest_wrench, self.view.smoothed_wrench) {
+                (Some(last), Some(smoothed)) => {
+                    let dt_s = w.timestamp_us.saturating_sub(last.timestamp_us) as f32 * 1e-6;
+                    let fraction = 1.0 - (-dt_s / SMOOTHING_TIME_S).exp();
+                    std::array::from_fn(|i| smoothed[i] + fraction * (w.values[i] - smoothed[i]))
+                }
+                _ => w.values,
+            },
+        );
+        self.view.latest_wrench = Some(w);
     }
 
     /// Called at `DISPLAY_PERIOD`; updates the rate estimate and returns a snapshot.
@@ -317,24 +354,15 @@ fn App() -> impl IntoView {
             };
             averaging.set(true);
             spawn_local(async move {
-                let result = match client.send_resp::<AverageEndpoint>(&()).await {
-                    Ok(Ok(counts)) => Ok(counts),
-                    Ok(Err(AverageError::AdcError)) => {
-                        Err("an ADC error occurred while averaging (see device log)".into())
-                    }
-                    Ok(Err(AverageError::Timeout)) => {
-                        Err("not enough readings arrived (is sampling running?)".into())
-                    }
-                    Err(HostErr::Wire(WireError::FailedToSpawn)) => {
-                        Err("an average is already running".into())
-                    }
-                    Err(e) => Err(format!("average request failed: {e:?}")),
-                };
-                average.set(Some(result));
+                average.set(Some(request_average(&client).await));
                 averaging.set(false);
             });
         }
     };
+
+    // 3D view inputs set elsewhere on the page.
+    let weights = RwSignal::new(Vec::<usize>::new());
+    let center_of_mass_mode = RwSignal::new(false);
 
     // The current client, if connected. Through a `StoredValue` handle (`Copy`,
     // `Send`), because some views (e.g. inside `<Show>`) require `Send` closures,
@@ -673,10 +701,65 @@ fn App() -> impl IntoView {
         <view3d::View3d
             wrench={
                 let accum = accum.clone();
-                move || accum.borrow().view.latest_wrench.as_ref().map(|w| w.values)
+                move || {
+                    let accum = accum.borrow();
+                    if center_of_mass_mode.get_untracked() {
+                        accum.view.smoothed_wrench
+                    } else {
+                        accum.view.latest_wrench.as_ref().map(|w| w.values)
+                    }
+                }
             }
-            reference_point=reference_point
+            inputs=view3d::ViewInputs {
+                reference_point,
+                weights,
+                center_of_mass_mode,
+            }
         />
+
+        <h2>"Center of mass"</h2>
+        <p style="max-width: 900px">
+            <label>
+                <input
+                    type="checkbox"
+                    prop:checked=move || center_of_mass_mode.get()
+                    on:change=move |ev| center_of_mass_mode.set(event_target_checked(&ev))
+                />
+                " Show the center of mass of what rests on the platform"
+            </label>
+            {format!(
+                " (zero the empty platform first). Assumes the only load is its weight; the \
+                 3D arrows move to the center of mass and the values are smoothed with a \
+                 time constant of {SMOOTHING_TIME_S} s."
+            )}
+        </p>
+        <Show when=move || center_of_mass_mode.get()>
+            <p style="font-family: monospace">
+                {move || {
+                    let zeroed = device_calibration.with(|d| d.is_some_and(|d| d.is_zeroed()));
+                    let warning = if zeroed { "" } else { " (not zeroed!)" };
+                    readings
+                        .with(|r| r.smoothed_wrench)
+                        .map(|w| match center_of_mass(&w, view3d::MIN_COM_WEIGHT_N) {
+                            Some(com) => format!(
+                                "mass {:.1} g, x {:.1} mm, y {:.1} mm{warning}; check (should be \
+                                 about 0): horizontal force {:.3} N, Mz {:.4} N·m",
+                                com.mass_kg * 1000.0,
+                                // `+ 0.0` turns −0.0 into 0.0 (no "−0.0" shown).
+                                com.position_mm[0] + 0.0,
+                                com.position_mm[1] + 0.0,
+                                w[0].hypot(w[1]),
+                                w[5] + 0.0,
+                            ),
+                            None => format!(
+                                "nothing heavier than {:.0} g on the platform{warning}",
+                                view3d::MIN_COM_WEIGHT_N / STANDARD_GRAVITY * 1000.0
+                            ),
+                        })
+                        .unwrap_or_else(|| "not connected".into())
+                }}
+            </p>
+        </Show>
 
         <h2>"Calibration"</h2>
         <Show when=offer_apply>
@@ -754,6 +837,13 @@ fn App() -> impl IntoView {
                 Some(Err(e)) => format!("Error: {e}"),
             }}
         </p>
+
+        <wizard::Wizard
+            client=client
+            weights=weights
+            device_calibration=device_calibration
+            saved=saved
+        />
 
         <h2>"Device log"</h2>
         <ul>

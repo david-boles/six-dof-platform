@@ -84,19 +84,38 @@ unique) and the client then does the same; the fake always uses 8-byte keys.
 
 Last run: 2026-11-24, headless Chromium, all as above.
 
+## Calibration wizard and center of mass
+
+- Wizard: attach the generated sequence before connecting,
+  `MOCK.endpoints[<average key>].sequence = MOCK.wizardAverages` (the fake then
+  answers each `average` with the next element). It is one 6-case run (1 kg singles):
+  empty, M0..M5, empty + 5 counts drift, generated with per-cell scales nominal ×
+  0.95, 0.97, …, 1.05. Start (1000 g, no pairs), capture 8 times → results: ratios
+  0.9500 … 1.0500, RMS error 0.0 mN, drift 5 counts, every case 1000.0 g at 0.0 mm
+  position error. Apply sends one `calibration/set`; Back/Cancel step back.
+- Center of mass (checkbox): "mass 1000.0 g, x 0.0 mm, y 0.0 mm (not zeroed!)",
+  horizontal force and Mz 0.
+
 ## 3D view
 
 The browser tool's headless Chromium runs without a GPU and Alpine's Chromium has
 no software WebGL (SwiftShader), so the 3D view shows "3D view unavailable" there.
-To render it in the VM, install Mesa's software renderer (lost on VM reset) and run
-a separate Chromium:
+To render it in the VM, Mesa's software renderer is needed (`apk add
+mesa-dri-gallium mesa-egl mesa-gles mesa-gbm`; part of David's VM image since
+2026-11-25) and a separate Chromium, driven by `render-3d.mjs` over the DevTools
+protocol in real time:
 
 ```sh
-apk add mesa-dri-gallium mesa-egl mesa-gles mesa-gbm
-chromium --headless=new --no-sandbox --use-angle=gl-egl --ignore-gpu-blocklist \
-  --enable-gpu --user-data-dir=/tmp/cr-gl --window-size=900,500 \
-  --virtual-time-budget=4000 --screenshot=/tmp/view.png file:///tmp/test-3d.html
+node web/test/render-3d.mjs file:///tmp/test-3d.html /tmp/view.png 4500 900x500
+python3 web/test/pngdiff.py /tmp/without.png /tmp/with.png
 ```
+
+Don't use `--virtual-time-budget` screenshots for anything animated: in that mode
+headless Chromium runs timers but stops delivering `requestAnimationFrame`, so the
+view stops updating (found 2026-11-25; the wizard's weights never appeared).
+Viewing the PNGs with the agent's read tool currently aborts (TODO 3.1.1), so
+compare screenshots with `pngdiff.py` instead (count, bounding box and colors of
+the differing pixels).
 
 `/tmp/test-3d.html` is a copy of `dist/six-dof.html` with, before `</body>`: a
 style hiding everything but the canvas (`body > :not(canvas) { display: none }`),
@@ -105,4 +124,6 @@ the two fake-device scripts, and a `setTimeout` that clicks Connect after 1 s.
 Expected (1 kg at the center): the whole stand in view; load cells slightly blue
 (2 N compression each); orange force arrow ending at the reference point; with
 x = 50 mm a purple double arrow of about 98 mm along −y (My = −0.49 N·m).
-Orbit and zoom need a real browser.
+Wizard at case 1 (weight on M0) vs. the same page without the capture click: about
+4,100 differing pixels in a 52 × 90 px region left of center, grey (195, 195, 194)
+instead of the tan platform (2026-11-25). Orbit and zoom need a real browser.

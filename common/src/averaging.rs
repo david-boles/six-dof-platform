@@ -91,7 +91,7 @@ impl CountsAccumulator {
 
 /// Square root by Newton's method: `f64::sqrt` is only in `std`, and this
 /// crate is `no_std` (e.g. for the firmware). Runs once per channel per average.
-fn sqrt(x: f64) -> f64 {
+pub(crate) fn sqrt(x: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
