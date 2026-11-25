@@ -25,6 +25,23 @@ web-sys = { version = "0.3", features = [
     "ReadableStreamDefaultReader",
     "WritableStream",
     "WritableStreamDefaultWriter",
+    # Calibration storage (storage.rs): localStorage, JSON file download/upload.
+    "Storage",
+    "Document",
+    "Node",
+    "Element",
+    "EventTarget",
+    "HtmlElement",
+    "HtmlAnchorElement",
+    "HtmlInputElement",
+    "File",
+    "FileList",
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
 ] }
+# Saved calibration and reference point as JSON (storage.rs).
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 console_error_panic_hook = "0.1"
 thiserror = "2"

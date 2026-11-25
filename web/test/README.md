@@ -59,6 +59,21 @@ Defined at the top of `../mockgen/src/main.rs`. After the stream ends (about 4 s
   `0100` (= `Err(AdcError)`) or `0101` (= `Err(Timeout)`) for the `average` entry →
   the matching error message.
 - Disconnect and Connect again: the same results again.
+- Zero and calibration (2.5; the fake device answers `*/set` with `Ok` but always
+  reports the nominal C and zero offsets 0 on connect, and its wrench stream is
+  fixed, so only the UI's labels and requests change):
+  - "Set the average as zero" / "Clear zero": one `zero/set` each, "Zero:
+    zeroed" / "not zeroed".
+  - Reference point x = 50 mm: My = −0.4903 N·m (1 kg at the center seen from
+    50 mm on the +x side), stored in `localStorage` and still there after a reload.
+  - Save with a note, export (JSON download), import (via the file input; in a
+    test, set `input.files` from a `DataTransfer` and dispatch `change`): a
+    different saved C than the device's shows the "Apply it?" offer on connect;
+    Apply / "Apply the saved calibration" / "Reset the device to nominal" send one
+    `calibration/set` each. Invalid files (other JSON, not JSON, non-finite
+    numbers) are refused and leave the saved calibration unchanged.
+  - The test leaves a saved calibration and reference point in the browser's
+    `localStorage` (`six-dof-platform.*` keys); clear them for a clean start.
 - Interface check (edit `MOCK.endpoints` before connecting): a different
   `interface/hash/get` body → "built from different interface versions"; the entry
   deleted → "the firmware is older than the interface version check". In both cases

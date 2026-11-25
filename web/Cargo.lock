@@ -1755,6 +1755,8 @@ dependencies = [
  "js-sys",
  "leptos",
  "postcard-rpc",
+ "serde",
+ "serde_json",
  "six-dof-platform-common",
  "thiserror 2.0.21",
  "wasm-bindgen",

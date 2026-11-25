@@ -219,6 +219,29 @@ pub const fn weight_wrench(mount_mm: [f64; 2], mass_kg: f64) -> Vec6 {
     )
 }
 
+/// The same wrench with torques about `point_mm` instead of the origin:
+/// `τ′ = τ − r × F` (r = `point_mm` in m). Forces are unchanged.
+///
+/// Why: a force F acting at p has torque p × F about the origin and
+/// (p − r) × F = p × F − r × F about r; summed over all forces, that is
+/// τ − r × F_total.
+pub fn wrench_about(wrench: &[f32; 6], point_mm: Vec3) -> [f32; 6] {
+    let force = [
+        f64::from(wrench[0]),
+        f64::from(wrench[1]),
+        f64::from(wrench[2]),
+    ];
+    let r_cross_f = cross(scale(point_mm, 1e-3), force);
+    [
+        wrench[0],
+        wrench[1],
+        wrench[2],
+        (f64::from(wrench[3]) - r_cross_f[0]) as f32,
+        (f64::from(wrench[4]) - r_cross_f[1]) as f32,
+        (f64::from(wrench[5]) - r_cross_f[2]) as f32,
+    ]
+}
+
 // ---------------------------------------------------------------------------
 // Small linear algebra helpers
 // ---------------------------------------------------------------------------
@@ -430,6 +453,29 @@ mod tests {
             let t = solve(&A, &weight_wrench(*mount, TEST_WEIGHT_KG)).unwrap();
             assert_close(&t, &expected[i], 1e-4, &format!("mount {i}"));
         }
+    }
+
+    /// About the point where a single force acts, its torque is zero; moving
+    /// the reference point back gives the original wrench.
+    #[test]
+    fn wrench_about_point() {
+        for mount in MOUNTS {
+            let w = weight_wrench(mount, TEST_WEIGHT_KG).map(|v| v as f32);
+            let about_mount = wrench_about(&w, [mount[0], mount[1], 0.0]);
+            assert_eq!(about_mount[..3], w[..3]);
+            for (i, m) in about_mount[3..].iter().enumerate() {
+                assert!(m.abs() < 1e-6, "mount {mount:?}, torque {i}: {m}");
+            }
+            // A point straight above/below the mount: vertical force, r × F
+            // unchanged by z.
+            let below = wrench_about(&w, [mount[0], mount[1], -100.0]);
+            assert!(below[3..].iter().all(|m| m.abs() < 1e-6));
+        }
+        // A horizontal force through the origin, seen from 0.1 m above it:
+        // F = (1, 0, 0) N, r = (0, 0, 0.1) m → τ′ = −r × F = −(0, 0.1, 0).
+        let w = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let moved = wrench_about(&w, [0.0, 0.0, 100.0]);
+        assert!((moved[4] + 0.1).abs() < 1e-7 && moved[3] == 0.0 && moved[5] == 0.0);
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! rate for display. 250 Hz readings never go through the reactive system directly.
 
 mod serial;
+mod storage;
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -13,14 +14,22 @@ use postcard_rpc::{
     host_client::{HostErr, MultiSubRxError},
     standard_icd::{LoggingTopic, WireError},
 };
-use six_dof_platform_common::interface::{
-    AVERAGE_DURATION_MS, AdcStatus, AdcStatusTopic, AverageCounts, AverageEndpoint, AverageError,
-    CHANNELS, DeviceInfo, GetAdcStatusEndpoint, GetCalibrationEndpoint, GetInfoEndpoint,
-    GetInterfaceHashEndpoint, GetTimeEndpoint, GetZeroEndpoint, INTERFACE_HASH, Readings,
-    ReadingsTopic, WRENCH_LEN, Wrench, WrenchTopic,
+use six_dof_platform_common::{
+    geometry::{DEFAULT_C, wrench_about},
+    interface::{
+        AVERAGE_DURATION_MS, AdcStatus, AdcStatusTopic, AverageCounts, AverageEndpoint,
+        AverageError, CHANNELS, CalibrationMatrix, DeviceInfo, GetAdcStatusEndpoint,
+        GetCalibrationEndpoint, GetInfoEndpoint, GetInterfaceHashEndpoint, GetTimeEndpoint,
+        GetZeroEndpoint, INTERFACE_HASH, Readings, ReadingsTopic, SetCalibrationEndpoint, SetError,
+        SetResult, SetZeroEndpoint, WRENCH_LEN, Wrench, WrenchTopic, ZeroCounts,
+    },
 };
+use web_sys::HtmlInputElement;
 
-use crate::serial::Connection;
+use crate::{
+    serial::{Client, Connection},
+    storage::SavedCalibration,
+};
 
 fn main() {
     console_error_panic_hook::set_once();
@@ -40,12 +49,89 @@ enum Status {
     Failed(String),
 }
 
-/// Whether the device still uses its boot defaults (read once after connecting;
-/// only this UI can change them, and it doesn't yet).
+/// The calibration matrix C and zero offsets z the device uses: read after
+/// connecting, updated when this UI sets them (nothing else can).
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct CalibrationFlags {
-    matrix_is_boot_default: bool,
-    zero_is_boot_default: bool,
+struct DeviceCalibration {
+    matrix: CalibrationMatrix,
+    zero: ZeroCounts,
+}
+
+impl DeviceCalibration {
+    fn is_zeroed(&self) -> bool {
+        self.zero != [0.0; CHANNELS]
+    }
+
+    /// What C is, for display.
+    fn matrix_label(&self, saved: Option<&SavedCalibration>) -> &'static str {
+        if saved.is_some_and(|s| s.matrix == self.matrix) {
+            "the calibration saved in this browser"
+        } else if self.matrix == DEFAULT_C {
+            "nominal (datasheet scale and CAD geometry, not calibrated)"
+        } else {
+            "custom (not the one saved in this browser)"
+        }
+    }
+}
+
+/// The signals a calibration/zero action updates (signals are `Copy` handles).
+#[derive(Clone, Copy)]
+struct ActionSignals {
+    /// True while a request runs (buttons disabled).
+    busy: RwSignal<bool>,
+    device_calibration: RwSignal<Option<DeviceCalibration>>,
+    /// Outcome of the last action (Ok = info, Err = error).
+    message: RwSignal<Option<Result<String, String>>>,
+}
+
+/// Runs a calibration/zero request in the background: marks the UI busy, shows
+/// the outcome, and on success applies `update` to the known device state.
+fn run_action<F, Fut>(
+    signals: ActionSignals,
+    client: Option<Client>,
+    action: &'static str,
+    request: F,
+    update: impl FnOnce(&mut DeviceCalibration) + 'static,
+) where
+    F: FnOnce(Client) -> Fut + 'static,
+    Fut: Future<Output = Result<(), String>> + 'static,
+{
+    let Some(client) = client else { return };
+    signals.busy.set(true);
+    spawn_local(async move {
+        let result = request(client).await;
+        if result.is_ok() {
+            signals.device_calibration.update(|d| {
+                if let Some(d) = d {
+                    update(d);
+                }
+            });
+        }
+        let time = js_sys::Date::new_0().to_locale_time_string("en-GB");
+        signals.message.set(Some(match result {
+            Ok(()) => Ok(format!("{time}: {action}.")),
+            Err(e) => Err(format!("{time}: {action} failed: {e}")),
+        }));
+        signals.busy.set(false);
+    });
+}
+
+/// Sends a new calibration matrix.
+async fn set_matrix(client: &Client, matrix: CalibrationMatrix) -> Result<(), String> {
+    set_result(client.send_resp::<SetCalibrationEndpoint>(&matrix).await)
+}
+
+/// Sends new zero offsets.
+async fn set_zero(client: &Client, zero: ZeroCounts) -> Result<(), String> {
+    set_result(client.send_resp::<SetZeroEndpoint>(&zero).await)
+}
+
+fn set_result(result: Result<SetResult, HostErr<WireError>>) -> Result<(), String> {
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(SetError::NotFinite)) => Err("the device refused it: invalid numbers".into()),
+        Err(e) => Err(format!("request failed: {e:?}")),
+    }
 }
 
 /// Labels and units of the wrench components, in `Wrench::values` order.
@@ -139,8 +225,22 @@ fn App() -> impl IntoView {
     let status = RwSignal::new(Status::Disconnected);
     let readings = RwSignal::new(ReadingsView::default());
     let adc_status = RwSignal::new(None::<AdcStatus>);
-    let calibration_flags = RwSignal::new(None::<CalibrationFlags>);
+    let device_calibration = RwSignal::new(None::<DeviceCalibration>);
     let log = RwSignal::new(Vec::<String>::new());
+
+    // Kept in the browser (storage.rs).
+    let saved = RwSignal::new(None::<SavedCalibration>);
+    // Result of the last calibration/zero action (Ok = info, Err = error).
+    let calibration_message = RwSignal::new(None::<Result<String, String>>);
+    match storage::load_calibration() {
+        Ok(s) => saved.set(s),
+        Err(e) => calibration_message.set(Some(Err(e))),
+    }
+    let reference_point = RwSignal::new(storage::load_reference_point());
+    // A calibration or zero request is running.
+    let busy = RwSignal::new(false);
+    // The user said "not now" to applying the saved calibration (this connection).
+    let offer_dismissed = RwSignal::new(false);
 
     // Non-reactive state shared between event handlers and background tasks.
     // (`Rc<RefCell<..>>` is fine: the browser runs all of this on one thread.)
@@ -164,13 +264,14 @@ fn App() -> impl IntoView {
             status.set(Status::Connecting);
             // The device may have been reset since the last connection.
             adc_status.set(None);
-            calibration_flags.set(None);
+            device_calibration.set(None);
+            offer_dismissed.set(false);
             spawn_local(async move {
                 match start(accum, adc_status, log).await {
-                    Ok((conn, info, flags)) => {
+                    Ok((conn, info, calibration)) => {
                         let client = conn.client.clone();
                         *connection.borrow_mut() = Some(conn);
-                        calibration_flags.set(Some(flags));
+                        device_calibration.set(Some(calibration));
                         status.set(Status::Connected(info));
                         // Watch for the link dying (unplug, firmware reset, ...).
                         client.wait_closed().await;
@@ -230,6 +331,135 @@ fn App() -> impl IntoView {
                 average.set(Some(result));
                 averaging.set(false);
             });
+        }
+    };
+
+    // The current client, if connected. Through a `StoredValue` handle (`Copy`,
+    // `Send`), because some views (e.g. inside `<Show>`) require `Send` closures,
+    // and the `Rc` itself isn't.
+    let connection_handle = StoredValue::new_local(connection.clone());
+    let client =
+        move || connection_handle.with_value(|c| c.borrow().as_ref().map(|c| c.client.clone()));
+
+    let signals = ActionSignals {
+        busy,
+        device_calibration,
+        message: calibration_message,
+    };
+    let on_set_zero = move |_| {
+        let Some(Ok(a)) = average.get_untracked() else {
+            return;
+        };
+        let zero = a.mean;
+        run_action(
+            signals,
+            client(),
+            "zero set to the average",
+            move |c| async move { set_zero(&c, zero).await },
+            move |d| d.zero = zero,
+        );
+    };
+    let on_clear_zero = move |_| {
+        run_action(
+            signals,
+            client(),
+            "zero cleared",
+            |c| async move { set_zero(&c, [0.0; CHANNELS]).await },
+            |d| d.zero = [0.0; CHANNELS],
+        );
+    };
+    let on_apply_saved = move |_| {
+        let Some(s) = saved.get_untracked() else {
+            return;
+        };
+        let matrix = s.matrix;
+        run_action(
+            signals,
+            client(),
+            "saved calibration applied to the device",
+            move |c| async move { set_matrix(&c, matrix).await },
+            move |d| d.matrix = matrix,
+        );
+    };
+    let on_reset_nominal = move |_| {
+        run_action(
+            signals,
+            client(),
+            "device reset to the nominal calibration",
+            |c| async move { set_matrix(&c, DEFAULT_C).await },
+            |d| d.matrix = DEFAULT_C,
+        );
+    };
+
+    let note = RwSignal::new(String::new());
+    let on_save = move |_| {
+        let Some(d) = device_calibration.get_untracked() else {
+            return;
+        };
+        let new = SavedCalibration::new(d.matrix, note.get_untracked());
+        calibration_message.set(Some(match storage::store_calibration(&new) {
+            Ok(()) => {
+                saved.set(Some(new));
+                Ok("the device's calibration is now saved in this browser.".into())
+            }
+            Err(e) => Err(e),
+        }));
+    };
+    let on_export = move |_| {
+        let Some(s) = saved.get_untracked() else {
+            return;
+        };
+        if let Err(e) = storage::download(&s.file_name(), &s.to_json()) {
+            calibration_message.set(Some(Err(e)));
+        }
+    };
+    let on_import = move |ev: leptos::ev::Event| {
+        let input: HtmlInputElement = event_target(&ev);
+        spawn_local(async move {
+            let result = storage::read_selected_file(&input)
+                .await
+                .and_then(|text| SavedCalibration::from_json(&text))
+                .and_then(|new| {
+                    storage::store_calibration(&new)?;
+                    let replaced = saved
+                        .get_untracked()
+                        .map(|old| format!(" (replaced the one saved {})", old.saved_at))
+                        .unwrap_or_default();
+                    let message = format!(
+                        "imported the calibration saved {}{replaced}; not applied to the \
+                         device yet.",
+                        new.saved_at
+                    );
+                    saved.set(Some(new));
+                    offer_dismissed.set(false);
+                    Ok(message)
+                });
+            calibration_message.set(Some(result));
+            // Allow importing the same file again.
+            input.set_value("");
+        });
+    };
+
+    // Show the offer when connected, a calibration is saved, the device isn't
+    // using it and the user hasn't said "not now".
+    let offer_apply = move || {
+        let Some(s) = saved.get() else { return false };
+        device_calibration
+            .get()
+            .is_some_and(|d| d.matrix != s.matrix && !offer_dismissed.get())
+    };
+
+    let set_reference = move |axis: usize| {
+        move |ev: leptos::ev::Event| {
+            let input: HtmlInputElement = event_target(&ev);
+            match input.value().trim().parse::<f64>() {
+                Ok(v) if v.is_finite() => {
+                    reference_point.update(|p| p[axis] = v);
+                    storage::store_reference_point(reference_point.get_untracked());
+                }
+                // Invalid input: show the current value again.
+                _ => input.set_value(&reference_point.get_untracked()[axis].to_string()),
+            }
         }
     };
 
@@ -350,27 +580,60 @@ fn App() -> impl IntoView {
                     }
                 })
         }}
+        <p>
+            <button
+                on:click=on_set_zero
+                disabled=move || {
+                    !connected() || busy.get() || averaging.get()
+                        || !matches!(average.get(), Some(Ok(_)))
+                }
+            >
+                "Set the average as zero"
+            </button>
+            " "
+            <button on:click=on_clear_zero disabled=move || !connected() || busy.get()>
+                "Clear zero"
+            </button>
+            " Zeroing subtracts the offsets in the device's wrench calculation; the raw \
+             counts above stay raw."
+        </p>
 
         <h2>"Wrench"</h2>
         <p>
-            "External load on the platform, torques about the origin (center of the top \
-             triangle). "
-            {move || match calibration_flags.get() {
+            {move || {
+                let [x, y, z] = reference_point.get();
+                format!("External load on the platform; torques about ({x}, {y}, {z}) mm. ")
+            }}
+            {move || match device_calibration.get() {
                 None => String::new(),
-                Some(f) => {
-                    let matrix = if f.matrix_is_boot_default {
-                        "nominal (datasheet scale, CAD geometry; not calibrated)"
-                    } else {
-                        "set by the UI"
-                    };
-                    let zero = if f.zero_is_boot_default {
-                        "not zeroed"
-                    } else {
-                        "zeroed"
-                    };
-                    format!("Calibration: {matrix}. Zero: {zero}.")
+                Some(d) => {
+                    let zero = if d.is_zeroed() { "zeroed" } else { "not zeroed" };
+                    format!(
+                        "Calibration: {}. Zero: {zero}.",
+                        saved.with(|s| d.matrix_label(s.as_ref())),
+                    )
                 }
             }}
+        </p>
+        <p>
+            "Reference point for torques (mm; origin = center of the top triangle, top \
+             surface of the platform): "
+            {["x", "y", "z"]
+                .into_iter()
+                .enumerate()
+                .map(|(axis, label)| {
+                    view! {
+                        {format!(" {label} ")}
+                        <input
+                            type="number"
+                            step="any"
+                            style="width: 6em"
+                            prop:value=move || reference_point.get()[axis].to_string()
+                            on:change=set_reference(axis)
+                        />
+                    }
+                })
+                .collect_view()}
         </p>
         <table>
             <tr>
@@ -382,14 +645,16 @@ fn App() -> impl IntoView {
                         view! {
                             <td style="text-align: right; font-family: monospace; padding: 0 1em">
                                 {move || {
+                                    let point = reference_point.get();
                                     readings
                                         .with(|r| {
                                             r.latest_wrench.as_ref().map(|w| {
+                                                let value = wrench_about(&w.values, point)[i];
                                                 // Forces to 1 mN, torques to 0.1 mN·m.
                                                 if i < 3 {
-                                                    format!("{:.3}", w.values[i])
+                                                    format!("{value:.3}")
                                                 } else {
-                                                    format!("{:.4}", w.values[i])
+                                                    format!("{value:.4}")
                                                 }
                                             })
                                         })
@@ -401,6 +666,83 @@ fn App() -> impl IntoView {
                     .collect_view()}
             </tr>
         </table>
+
+        <h2>"Calibration"</h2>
+        <Show when=offer_apply>
+            <p style="background: #ffd; padding: 0.5em">
+                {move || {
+                    saved
+                        .get()
+                        .map(|s| {
+                            format!(
+                                "This browser has a saved calibration ({}{}) that the device \
+                                 isn't using. Apply it? ",
+                                s.saved_at,
+                                if s.note.is_empty() { String::new() } else { format!(": {}", s.note) },
+                            )
+                        })
+                }}
+                <button on:click=on_apply_saved disabled=move || busy.get()>"Apply"</button>
+                " "
+                <button on:click=move |_| offer_dismissed.set(true)>"Not now"</button>
+            </p>
+        </Show>
+        <p>
+            "Device: "
+            {move || match device_calibration.get() {
+                None => "not connected".to_string(),
+                Some(d) => saved.with(|s| d.matrix_label(s.as_ref())).to_string(),
+            }}
+            ". The device keeps it only until it's reset."
+        </p>
+        <p>
+            "Saved in this browser: "
+            {move || match saved.get() {
+                None => "none".to_string(),
+                Some(s) if s.note.is_empty() => format!("saved {}", s.saved_at),
+                Some(s) => format!("saved {}: {}", s.saved_at, s.note),
+            }}
+        </p>
+        <p>
+            <button
+                on:click=on_apply_saved
+                disabled=move || !connected() || busy.get() || saved.with(Option::is_none)
+            >
+                "Apply the saved calibration to the device"
+            </button>
+            " "
+            <button on:click=on_reset_nominal disabled=move || !connected() || busy.get()>
+                "Reset the device to nominal"
+            </button>
+        </p>
+        <p>
+            "Note: "
+            <input
+                type="text"
+                style="width: 20em"
+                placeholder="e.g. how it was made"
+                prop:value=move || note.get()
+                on:input=move |ev| note.set(event_target_value(&ev))
+            />
+            " "
+            <button on:click=on_save disabled=move || device_calibration.with(Option::is_none)>
+                "Save the device's calibration in this browser"
+            </button>
+        </p>
+        <p>
+            <button on:click=on_export disabled=move || saved.with(Option::is_none)>
+                "Export the saved calibration (JSON)"
+            </button>
+            " Import (replaces the saved one): "
+            <input type="file" accept=".json,application/json" on:change=on_import />
+        </p>
+        <p>
+            {move || match calibration_message.get() {
+                None => String::new(),
+                Some(Ok(m)) => m,
+                Some(Err(e)) => format!("Error: {e}"),
+            }}
+        </p>
 
         <h2>"Device log"</h2>
         <ul>
@@ -417,10 +759,10 @@ async fn start(
     accum: Rc<RefCell<ReadingsAccum>>,
     adc_status: RwSignal<Option<AdcStatus>>,
     log: RwSignal<Vec<String>>,
-) -> Result<(Connection, DeviceInfo, CalibrationFlags), String> {
+) -> Result<(Connection, DeviceInfo, DeviceCalibration), String> {
     let conn = serial::connect().await.map_err(|e| e.to_string())?;
     match setup(&conn.client, accum, adc_status, log).await {
-        Ok((info, flags)) => Ok((conn, info, flags)),
+        Ok((info, calibration)) => Ok((conn, info, calibration)),
         Err(e) => {
             conn.close().await;
             Err(e)
@@ -435,7 +777,7 @@ async fn setup(
     accum: Rc<RefCell<ReadingsAccum>>,
     adc_status: RwSignal<Option<AdcStatus>>,
     log: RwSignal<Vec<String>>,
-) -> Result<(DeviceInfo, CalibrationFlags), String> {
+) -> Result<(DeviceInfo, DeviceCalibration), String> {
     let closed = |_| "connection closed".to_string();
 
     // First, so a firmware/UI mismatch gives a clear message instead of failing
@@ -502,9 +844,9 @@ async fn setup(
         .send_resp::<GetZeroEndpoint>(&())
         .await
         .map_err(|e| format!("zero request failed: {e:?}"))?;
-    let flags = CalibrationFlags {
-        matrix_is_boot_default: calibration.is_boot_default,
-        zero_is_boot_default: zero.is_boot_default,
+    let device_calibration = DeviceCalibration {
+        matrix: calibration.matrix,
+        zero: zero.counts,
     };
 
     *accum.borrow_mut() = ReadingsAccum::new(info.sample_period_us, connected_at_us);
@@ -563,7 +905,7 @@ async fn setup(
         }
     });
 
-    Ok((info, flags))
+    Ok((info, device_calibration))
 }
 
 /// The more severe of two statuses (`Ok` < `Errored` < `Terminated`).
