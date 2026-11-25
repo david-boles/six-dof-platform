@@ -4,8 +4,10 @@
 //! plain (non-reactive) accumulators → copied into Leptos signals at a fixed, slow
 //! rate for display. 250 Hz readings never go through the reactive system directly.
 
+mod model_format;
 mod serial;
 mod storage;
+mod view3d;
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -666,6 +668,15 @@ fn App() -> impl IntoView {
                     .collect_view()}
             </tr>
         </table>
+
+        <h2>"3D view"</h2>
+        <view3d::View3d
+            wrench={
+                let accum = accum.clone();
+                move || accum.borrow().view.latest_wrench.as_ref().map(|w| w.values)
+            }
+            reference_point=reference_point
+        />
 
         <h2>"Calibration"</h2>
         <Show when=offer_apply>

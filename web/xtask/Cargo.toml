@@ -8,3 +8,5 @@ description = "Build helper: bundles the web app into a single HTML file (`cargo
 [dependencies]
 wasm-bindgen-cli-support = { workspace = true }
 base64 = "0.22"
+# Reading the CAD export (model.rs). `import` loads buffers incl. data URIs.
+gltf = "1.4"

@@ -83,3 +83,26 @@ Not covered: the real server shortens keys (to the fewest bytes that keep them
 unique) and the client then does the same; the fake always uses 8-byte keys.
 
 Last run: 2026-11-24, headless Chromium, all as above.
+
+## 3D view
+
+The browser tool's headless Chromium runs without a GPU and Alpine's Chromium has
+no software WebGL (SwiftShader), so the 3D view shows "3D view unavailable" there.
+To render it in the VM, install Mesa's software renderer (lost on VM reset) and run
+a separate Chromium:
+
+```sh
+apk add mesa-dri-gallium mesa-egl mesa-gles mesa-gbm
+chromium --headless=new --no-sandbox --use-angle=gl-egl --ignore-gpu-blocklist \
+  --enable-gpu --user-data-dir=/tmp/cr-gl --window-size=900,500 \
+  --virtual-time-budget=4000 --screenshot=/tmp/view.png file:///tmp/test-3d.html
+```
+
+`/tmp/test-3d.html` is a copy of `dist/six-dof.html` with, before `</body>`: a
+style hiding everything but the canvas (`body > :not(canvas) { display: none }`),
+optionally `localStorage.setItem('six-dof-platform.reference-point', '[50, 0, 0]')`,
+the two fake-device scripts, and a `setTimeout` that clicks Connect after 1 s.
+Expected (1 kg at the center): the whole stand in view; load cells slightly blue
+(2 N compression each); orange force arrow ending at the reference point; with
+x = 50 mm a purple double arrow of about 98 mm along −y (My = −0.49 N·m).
+Orbit and zoom need a real browser.

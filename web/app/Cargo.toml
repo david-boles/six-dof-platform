@@ -39,7 +39,17 @@ web-sys = { version = "0.3", features = [
     "Blob",
     "BlobPropertyBag",
     "Url",
+    # 3D view (view3d.rs).
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+    "MouseEvent",
+    "WheelEvent",
 ] }
+# 3D view: three-d's renderer on a WebGL2 context we create ourselves from the
+# canvas (so no `window` feature, which would bring winit). three-d 0.19 uses glow
+# 0.17; keep them matched.
+three-d = { version = "0.19", default-features = false }
+glow = "0.17"
 # Saved calibration and reference point as JSON (storage.rs).
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
