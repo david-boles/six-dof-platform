@@ -15,7 +15,7 @@
 //! Everything here is `const` (evaluated by the compiler), so the firmware gets
 //! the default calibration as a table in flash.
 
-use crate::interface::CHANNELS;
+use crate::interface::{CHANNELS, CalibrationMatrix, WRENCH_LEN};
 
 /// 3D vector (mm or m, see the item's documentation).
 pub type Vec3 = [f64; 3];
@@ -169,7 +169,7 @@ pub const A: Mat6 = wrench_matrix(&LINKS);
 /// `w = C · (c − z)` with `c` the raw counts and `z` the zero offsets.
 /// `C = A · diag(K_NOMINAL_N_PER_COUNT)`; rows 0–2 in N/count, rows 3–5 in
 /// N·m/count. `f32` because that's what the firmware computes with.
-pub const DEFAULT_C: [[f32; CHANNELS]; 6] = default_calibration();
+pub const DEFAULT_C: CalibrationMatrix = default_calibration();
 
 const fn wrench_matrix(links: &[Link; CHANNELS]) -> Mat6 {
     let mut a = [[0.0; 6]; 6];
@@ -190,10 +190,10 @@ const fn wrench_matrix(links: &[Link; CHANNELS]) -> Mat6 {
     a
 }
 
-const fn default_calibration() -> [[f32; CHANNELS]; 6] {
-    let mut c = [[0.0; CHANNELS]; 6];
+const fn default_calibration() -> CalibrationMatrix {
+    let mut c = [[0.0; CHANNELS]; WRENCH_LEN];
     let mut row = 0;
-    while row < 6 {
+    while row < WRENCH_LEN {
         let mut col = 0;
         while col < CHANNELS {
             c[row][col] = (A[row][col] * K_NOMINAL_N_PER_COUNT) as f32;

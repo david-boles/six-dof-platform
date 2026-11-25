@@ -19,13 +19,44 @@ use serde::{Deserialize, Serialize};
 
 /// Number of load cell channels (3 ADCs × 2 differential inputs).
 pub const CHANNELS: usize = 6;
+/// Number of wrench components: `[Fx, Fy, Fz, Mx, My, Mz]`.
+pub const WRENCH_LEN: usize = 6;
 
+/// Calibration matrix C in `w = C · (c − z)`: row = wrench component
+/// (`[Fx, Fy, Fz, Mx, My, Mz]`), column = channel. Rows 0–2 in N/count, rows
+/// 3–5 in N·m/count; torques about the origin (`reference/geometry.md`).
+pub type CalibrationMatrix = [[f32; CHANNELS]; WRENCH_LEN];
+/// Zero offsets z in `w = C · (c − z)`, in ADC counts per channel. Floating
+/// point because they're averages (sub-count resolution).
+pub type ZeroCounts = [f32; CHANNELS];
+/// Reply to the `*/set` endpoints. (An alias because postcard-rpc's
+/// `endpoints!` table only accepts single-token types.)
+pub type SetResult = Result<(), SetError>;
+
+// Endpoints:
+// - `interface/hash/get`: the firmware's `INTERFACE_HASH`. The UI asks for it
+//   first, to detect firmware/UI version mismatches. NEVER CHANGE this endpoint
+//   (path or types), or that check can't work across versions.
+// - `info/get`, `adc/status/get`: see `DeviceInfo`, `AdcStatus`.
+// - `time/get`: device time now, in µs since boot (same clock as
+//   `Readings::timestamp_us`). The UI uses it after connecting to tell readings
+//   that were queued before the connection (sent first, possibly much older)
+//   from current ones.
+// - `calibration/get|set`, `zero/get|set`: C and z used for the `wrench` topic.
+//   Held in RAM only: after a reset the firmware uses `geometry::DEFAULT_C` and
+//   z = 0 again. `set` refuses NaN and infinite values.
 endpoints! {
     list = ENDPOINT_LIST;
-    | EndpointTy           | RequestTy | ResponseTy | Path             |
-    | ----------           | --------- | ---------- | ----             |
-    | GetInfoEndpoint      | ()        | DeviceInfo | "info/get"       |
-    | GetAdcStatusEndpoint | ()        | AdcStatus  | "adc/status/get" |
+    | EndpointTy               | RequestTy         | ResponseTy         | Path                 |
+    | ----------               | ---------         | ----------         | ----                 |
+    | GetInterfaceHashEndpoint | ()                | u64                | "interface/hash/get" |
+    | GetInfoEndpoint          | ()                | DeviceInfo         | "info/get"           |
+    | GetAdcStatusEndpoint     | ()                | AdcStatus          | "adc/status/get"     |
+    | GetTimeEndpoint          | ()                | u64                | "time/get"           |
+    | GetCalibrationEndpoint   | ()                | CalibrationSetting | "calibration/get"    |
+    | SetCalibrationEndpoint   | CalibrationMatrix | SetResult          | "calibration/set"    |
+    | GetZeroEndpoint          | ()                | ZeroSetting        | "zero/get"           |
+    | SetZeroEndpoint          | ZeroCounts        | SetResult          | "zero/set"           |
 }
 
 topics! {
@@ -42,6 +73,57 @@ topics! {
     | -------        | --------- | ----           |
     | ReadingsTopic  | Readings  | "adc/readings" |
     | AdcStatusTopic | AdcStatus | "adc/status"   |
+    | WrenchTopic    | Wrench    | "wrench"       |
+}
+
+// ---------------------------------------------------------------------------
+// Interface hash
+// ---------------------------------------------------------------------------
+
+/// Hash of the whole interface: all endpoint request/response keys and topic
+/// keys, including postcard-rpc's standard ones. Each key is itself a hash of the
+/// path and the type's wire structure (field and variant names, types, nesting;
+/// not type names), so this changes whenever anything on the wire changes. It
+/// doesn't change for changes in meaning that leave the bytes the same (units,
+/// sign conventions); David decided that's acceptable (2026-11-24).
+///
+/// The firmware returns it from `interface/hash/get`; the UI compares it with its
+/// own on connect.
+pub const INTERFACE_HASH: u64 = interface_hash();
+
+const fn interface_hash() -> u64 {
+    // FNV-1a (64 bit), the same hash postcard-rpc uses for keys: for each byte,
+    // XOR it into the state, then multiply by the FNV prime.
+    const fn update(mut state: u64, bytes: [u8; 8]) -> u64 {
+        let mut i = 0;
+        while i < bytes.len() {
+            state ^= bytes[i] as u64;
+            state = state.wrapping_mul(0x0000_0100_0000_01b3);
+            i += 1;
+        }
+        state
+    }
+
+    let mut state: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a offset basis
+    let endpoints = ENDPOINT_LIST.endpoints;
+    let mut i = 0;
+    while i < endpoints.len() {
+        state = update(state, endpoints[i].1.to_bytes());
+        state = update(state, endpoints[i].2.to_bytes());
+        i += 1;
+    }
+    let topic_lists = [TOPICS_IN_LIST.topics, TOPICS_OUT_LIST.topics];
+    let mut list = 0;
+    while list < topic_lists.len() {
+        let topics = topic_lists[list];
+        let mut i = 0;
+        while i < topics.len() {
+            state = update(state, topics[i].1.to_bytes());
+            i += 1;
+        }
+        list += 1;
+    }
+    state
 }
 
 // ---------------------------------------------------------------------------
@@ -65,8 +147,14 @@ pub const MAX_HEADER_SIZE: usize = 1 + 8 + 4;
 /// Largest decoded frame (header + body) the host sends to the device.
 pub const MAX_REQUEST_SIZE: usize = MAX_HEADER_SIZE
     + max_of([
+        request_size::<GetInterfaceHashEndpoint>(),
         request_size::<GetInfoEndpoint>(),
         request_size::<GetAdcStatusEndpoint>(),
+        request_size::<GetTimeEndpoint>(),
+        request_size::<GetCalibrationEndpoint>(),
+        request_size::<SetCalibrationEndpoint>(),
+        request_size::<GetZeroEndpoint>(),
+        request_size::<SetZeroEndpoint>(),
         // postcard-rpc's standard ping endpoint (`u32`).
         u32::POSTCARD_MAX_SIZE,
     ]);
@@ -74,10 +162,17 @@ pub const MAX_REQUEST_SIZE: usize = MAX_HEADER_SIZE
 /// Largest decoded frame (header + body) the device sends to the host.
 pub const MAX_DEVICE_MESSAGE_SIZE: usize = MAX_HEADER_SIZE
     + max_of([
+        response_size::<GetInterfaceHashEndpoint>(),
         response_size::<GetInfoEndpoint>(),
         response_size::<GetAdcStatusEndpoint>(),
+        response_size::<GetTimeEndpoint>(),
+        response_size::<GetCalibrationEndpoint>(),
+        response_size::<SetCalibrationEndpoint>(),
+        response_size::<GetZeroEndpoint>(),
+        response_size::<SetZeroEndpoint>(),
         message_size::<ReadingsTopic>(),
         message_size::<AdcStatusTopic>(),
+        message_size::<WrenchTopic>(),
         // `LoggingTopic` text: varint length prefix + bytes.
         varint_size(MAX_LOG_LEN) + MAX_LOG_LEN,
         // postcard-rpc's standard ping reply (`u32`).
@@ -131,9 +226,14 @@ mod tests {
     fn max_sizes() {
         assert_eq!(Readings::POSTCARD_MAX_SIZE, 10 + 6 * 5);
         assert_eq!(DeviceInfo::POSTCARD_MAX_SIZE, 10 + 5);
-        assert_eq!(MAX_REQUEST_SIZE, 13 + 5);
-        // Largest is the log message: 2-byte length prefix + 128 bytes.
-        assert_eq!(MAX_DEVICE_MESSAGE_SIZE, 13 + 2 + 128);
+        // f32 is always 4 bytes (not a varint).
+        assert_eq!(Wrench::POSTCARD_MAX_SIZE, 10 + 6 * 4);
+        assert_eq!(SetResult::POSTCARD_MAX_SIZE, 1 + 1);
+        // Largest request: `calibration/set`, 36 × f32.
+        assert_eq!(MAX_REQUEST_SIZE, 13 + 36 * 4);
+        // Largest device message: the `calibration/get` reply (36 × f32 + bool);
+        // next is the log message (2-byte length prefix + 128 bytes).
+        assert_eq!(MAX_DEVICE_MESSAGE_SIZE, 13 + 36 * 4 + 1);
     }
 
     #[test]
@@ -179,6 +279,45 @@ pub struct Readings {
     pub timestamp_us: u64,
     /// Signed 24-bit ADC counts, sign-extended. Index = 2 × ADC index + channel.
     pub raw: [i32; CHANNELS],
+}
+
+/// The wrench computed by the firmware for one set of readings:
+/// `w = C · (c − z)` with the current calibration matrix and zero offsets.
+#[derive(Serialize, Deserialize, Schema, MaxSize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Wrench {
+    /// Same as `Readings::timestamp_us` of the readings it was computed from.
+    pub timestamp_us: u64,
+    /// `[Fx, Fy, Fz, Mx, My, Mz]` in N and N·m: the external wrench applied to
+    /// the platform, torques about the origin (`reference/geometry.md`).
+    pub values: [f32; WRENCH_LEN],
+}
+
+/// Reply to `calibration/get`.
+#[derive(Serialize, Deserialize, Schema, MaxSize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct CalibrationSetting {
+    pub matrix: CalibrationMatrix,
+    /// True until `calibration/set` is called (the firmware's built-in nominal
+    /// matrix, `geometry::DEFAULT_C`, is in use).
+    pub is_boot_default: bool,
+}
+
+/// Reply to `zero/get`.
+#[derive(Serialize, Deserialize, Schema, MaxSize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ZeroSetting {
+    pub counts: ZeroCounts,
+    /// True until `zero/set` is called (zero offsets are all 0).
+    pub is_boot_default: bool,
+}
+
+/// Why a `*/set` request was refused.
+#[derive(Serialize, Deserialize, Schema, MaxSize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SetError {
+    /// A value is NaN or infinite (would make every wrench NaN).
+    NotFinite,
 }
 
 /// State of the ADC sampling task since the device started. Details of each error

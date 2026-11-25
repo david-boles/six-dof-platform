@@ -6,10 +6,9 @@ description = "Browser UI for the six-DOF test stand (Leptos, Web Serial)"
 
 [dependencies]
 six-dof-platform-common = { path = "../../common", features = ["use-std"] }
-# David's fork: v0.12.1 + embassy-executor 0.10 support (TODO 1.4).
-# Keep this rev identical in common/, firmware/ and web/.
-# `cobs` enables the COBS frame accumulator used by our Web Serial wire.
-postcard-rpc = { git = "https://github.com/david-boles/postcard-rpc", rev = "301d1384d1612a90fb3a6f3ea188d326f80a574b", features = ["use-std", "cobs"] }
+# Version: see web/Cargo.toml. `cobs` enables the COBS frame accumulator used by our
+# Web Serial wire.
+postcard-rpc = { workspace = true, features = ["use-std", "cobs"] }
 cobs = { version = "0.4", default-features = false, features = ["alloc"] }
 
 leptos = { version = "0.8", features = ["csr"] }

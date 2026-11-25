@@ -1736,6 +1736,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "six-dof-platform-mockgen"
+version = "0.1.0"
+dependencies = [
+ "cobs 0.4.0",
+ "postcard",
+ "postcard-rpc",
+ "serde",
+ "six-dof-platform-common",
+]
+
+[[package]]
 name = "six-dof-platform-web"
 version = "0.1.0"
 dependencies = [

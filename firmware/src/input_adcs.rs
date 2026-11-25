@@ -228,7 +228,7 @@ pub async fn run_adcs(
     // (I2C traffic stops for ~7ms after ~30ms).
     // I'm guessing this is a quirk of the debugger/execution setup?
     // Waiting a smidge seems to make it reliable.
-    Timer::after(Duration::from_millis(50)).await;
+    Timer::after(Duration::from_millis(100)).await;
 
     // Initialize resources
     let i2c = I2c::new(i2c, I2cConfig::default().with_frequency(Rate::from_mhz(1)))
