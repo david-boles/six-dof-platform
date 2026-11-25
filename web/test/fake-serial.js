@@ -140,7 +140,7 @@
       const header = [0b1100_0000 | (disc & 0b0011_0000), ...fromHex(reply.key), ...seq];
       const frame = cobsEncode([...header, ...fromHex(reply.body)]);
       frame.push(0);
-      setTimeout(() => this.deliver(frame), 1);
+      setTimeout(() => this.deliver(frame), (known && known.delayMs) || 1);
     }
   }
 

@@ -14,9 +14,10 @@ use postcard_rpc::{
     standard_icd::{LoggingTopic, WireError},
 };
 use six_dof_platform_common::interface::{
-    AdcStatus, AdcStatusTopic, CHANNELS, DeviceInfo, GetAdcStatusEndpoint, GetCalibrationEndpoint,
-    GetInfoEndpoint, GetInterfaceHashEndpoint, GetTimeEndpoint, GetZeroEndpoint, INTERFACE_HASH,
-    Readings, ReadingsTopic, WRENCH_LEN, Wrench, WrenchTopic,
+    AVERAGE_DURATION_MS, AdcStatus, AdcStatusTopic, AverageCounts, AverageEndpoint, AverageError,
+    CHANNELS, DeviceInfo, GetAdcStatusEndpoint, GetCalibrationEndpoint, GetInfoEndpoint,
+    GetInterfaceHashEndpoint, GetTimeEndpoint, GetZeroEndpoint, INTERFACE_HASH, Readings,
+    ReadingsTopic, WRENCH_LEN, Wrench, WrenchTopic,
 };
 
 use crate::serial::Connection;
@@ -202,6 +203,36 @@ fn App() -> impl IntoView {
 
     let connected = move || matches!(status.get(), Status::Connected(_));
 
+    // Latest `average` result (or error text) and whether one is running.
+    let average = RwSignal::new(None::<Result<AverageCounts, String>>);
+    let averaging = RwSignal::new(false);
+    let on_average = {
+        let connection = connection.clone();
+        move |_| {
+            let Some(client) = connection.borrow().as_ref().map(|c| c.client.clone()) else {
+                return;
+            };
+            averaging.set(true);
+            spawn_local(async move {
+                let result = match client.send_resp::<AverageEndpoint>(&()).await {
+                    Ok(Ok(counts)) => Ok(counts),
+                    Ok(Err(AverageError::AdcError)) => {
+                        Err("an ADC error occurred while averaging (see device log)".into())
+                    }
+                    Ok(Err(AverageError::Timeout)) => {
+                        Err("not enough readings arrived (is sampling running?)".into())
+                    }
+                    Err(HostErr::Wire(WireError::FailedToSpawn)) => {
+                        Err("an average is already running".into())
+                    }
+                    Err(e) => Err(format!("average request failed: {e:?}")),
+                };
+                average.set(Some(result));
+                averaging.set(false);
+            });
+        }
+    };
+
     view! {
         <h1>"Six-DOF test stand"</h1>
         <p>
@@ -272,6 +303,53 @@ fn App() -> impl IntoView {
                     })
             }}
         </p>
+        <p>
+            <button on:click=on_average disabled=move || !connected() || averaging.get()>
+                {format!("Average {:.0} s", AVERAGE_DURATION_MS as f64 / 1000.0)}
+            </button>
+            " "
+            {move || match average.get() {
+                _ if averaging.get() => "averaging...".to_string(),
+                None => String::new(),
+                Some(Ok(a)) => format!("{} readings", a.n),
+                Some(Err(e)) => format!("Error: {e}"),
+            }}
+        </p>
+        {move || {
+            average
+                .get()
+                .and_then(Result::ok)
+                .map(|a| {
+                    let row = |label: &'static str, values: [f32; CHANNELS], decimals: usize| {
+                        view! {
+                            <tr>
+                                <th style="text-align: left">{label}</th>
+                                {values
+                                    .map(|v| {
+                                        view! {
+                                            <td style="text-align: right; font-family: monospace; padding: 0 1em">
+                                                {format!("{v:.decimals$}")}
+                                            </td>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </tr>
+                        }
+                    };
+                    view! {
+                        <table>
+                            <tr>
+                                <th></th>
+                                {(0..CHANNELS)
+                                    .map(|i| view! { <th>{format!("Cell {i}")}</th> })
+                                    .collect_view()}
+                            </tr>
+                            {row("mean", a.mean, 1)}
+                            {row("std. dev.", a.std_dev, 2)}
+                        </table>
+                    }
+                })
+        }}
 
         <h2>"Wrench"</h2>
         <p>

@@ -15,9 +15,13 @@
 //!
 //! The pump also computes the wrench `w = C · (c − z)` for every set of readings,
 //! with the calibration matrix C and zero offsets z in `CALIBRATION` (set by the UI
-//! through the `calibration/set` and `zero/set` endpoints; RAM only).
+//! through the `calibration/set` and `zero/set` endpoints; RAM only), and feeds
+//! `AVERAGING` while an `average` request runs (`average_handler`).
 
-use core::{cell::Cell, fmt::Write};
+use core::{
+    cell::{Cell, RefCell},
+    fmt::Write,
+};
 
 use embassy_futures::select::{Either4, select4};
 use embassy_sync::{
@@ -26,7 +30,7 @@ use embassy_sync::{
     signal::Signal,
 };
 use embassy_sync_07::blocking_mutex::raw::CriticalSectionRawMutex as CriticalSectionRawMutex07;
-use embassy_time::Instant;
+use embassy_time::{Duration, Instant, with_timeout};
 use esp_hal::{
     Async,
     usb::usb_serial_jtag::{UsbSerialJtagRx, UsbSerialJtagTx},
@@ -35,23 +39,25 @@ use postcard_rpc::{
     define_dispatch,
     header::VarHeader,
     server::{
-        Sender, Server,
+        Sender, Server, SpawnContext,
         impls::embedded_io_async_v0_6::{
             EioWireTx, WireStorage,
-            dispatch_impl::{WireRxBuf, WireRxImpl, WireSpawnImpl},
+            dispatch_impl::{WireRxBuf, WireRxImpl, WireSpawnImpl, spawn_fn},
         },
     },
 };
 use six_dof_platform_common::{
+    averaging::CountsAccumulator,
     calibration::{all_finite, wrench_from_counts},
     geometry::DEFAULT_C,
     interface::{
-        AdcStatus, AdcStatusTopic, CHANNELS, CalibrationMatrix, CalibrationSetting, DeviceInfo,
-        ENDPOINT_LIST, GetAdcStatusEndpoint, GetCalibrationEndpoint, GetInfoEndpoint,
-        GetInterfaceHashEndpoint, GetTimeEndpoint, GetZeroEndpoint, INTERFACE_HASH,
-        MAX_DEVICE_MESSAGE_SIZE, MAX_LOG_LEN, MAX_REQUEST_SIZE, Readings, ReadingsTopic,
-        SetCalibrationEndpoint, SetError, SetResult, SetZeroEndpoint, TOPICS_IN_LIST,
-        TOPICS_OUT_LIST, Wrench, WrenchTopic, ZeroCounts, ZeroSetting,
+        AVERAGE_DURATION_MS, AdcStatus, AdcStatusTopic, AverageEndpoint, AverageError,
+        AverageResult, CHANNELS, CalibrationMatrix, CalibrationSetting, DeviceInfo, ENDPOINT_LIST,
+        GetAdcStatusEndpoint, GetCalibrationEndpoint, GetInfoEndpoint, GetInterfaceHashEndpoint,
+        GetTimeEndpoint, GetZeroEndpoint, INTERFACE_HASH, MAX_DEVICE_MESSAGE_SIZE, MAX_LOG_LEN,
+        MAX_REQUEST_SIZE, Readings, ReadingsTopic, SetCalibrationEndpoint, SetError, SetResult,
+        SetZeroEndpoint, TOPICS_IN_LIST, TOPICS_OUT_LIST, Wrench, WrenchTopic, ZeroCounts,
+        ZeroSetting,
     },
 };
 
@@ -98,6 +104,18 @@ static CALIBRATION: Mutex<CriticalSectionRawMutex, Cell<CalibrationState>> =
         zero_is_boot_default: true,
     }));
 
+/// Number of readings `average` takes (250 = 1 s at 250 Hz).
+const AVERAGE_READINGS: u32 =
+    (AVERAGE_DURATION_MS as u64 * 1000 / SAMPLE_PERIOD.as_micros()) as u32;
+/// How long `average_handler` waits before giving up (`AverageError::Timeout`).
+const AVERAGE_TIMEOUT: Duration = Duration::from_millis(AVERAGE_DURATION_MS as u64 + 1000);
+/// `Some` while an `average` request runs: the pump adds every set of readings.
+static AVERAGING: Mutex<CriticalSectionRawMutex, RefCell<Option<CountsAccumulator>>> =
+    Mutex::new(RefCell::new(None));
+/// Set by the pump when the average is complete or failed.
+static AVERAGE_DONE: Signal<CriticalSectionRawMutex, Result<CountsAccumulator, AverageError>> =
+    Signal::new();
+
 // ---------------------------------------------------------------------------
 // postcard-rpc server types (same structure as postcard-rpc's esp32c6-serial example)
 // ---------------------------------------------------------------------------
@@ -125,6 +143,14 @@ pub struct Context {
     pub unique_id: u64,
 }
 
+/// What spawned handlers (`kind = spawn`) get instead of `&mut Context`: they
+/// outlive the dispatch call, so they can't borrow it. `average_handler` needs
+/// nothing from it.
+impl SpawnContext for Context {
+    type SpawnCtxt = ();
+    fn spawn_ctxt(&mut self) -> Self::SpawnCtxt {}
+}
+
 define_dispatch! {
     app: App;
     spawn_fn: spawn_fn;
@@ -145,6 +171,7 @@ define_dispatch! {
         | SetCalibrationEndpoint   | blocking | set_calibration_handler |
         | GetZeroEndpoint          | blocking | get_zero_handler        |
         | SetZeroEndpoint          | blocking | set_zero_handler        |
+        | AverageEndpoint          | spawn    | average_handler         |
     };
     topics_in: {
         list: TOPICS_IN_LIST;
@@ -231,6 +258,43 @@ fn set_zero_handler(_context: &mut Context, _header: VarHeader, zero: ZeroCounts
     Ok(())
 }
 
+/// Runs as its own task (postcard-rpc `spawn` handler), so the 1 s wait doesn't
+/// hold up other requests. Embassy tasks have one instance by default, so a
+/// second `average` while this runs fails to spawn (`WireError::FailedToSpawn`).
+#[embassy_executor::task]
+async fn average_handler(_context: (), header: VarHeader, _rqst: (), sender: Sender<AppTx>) {
+    // Clear a result left over from a run that timed out just as it completed.
+    AVERAGE_DONE.reset();
+    AVERAGING.lock(|a| *a.borrow_mut() = Some(CountsAccumulator::new()));
+
+    let result: AverageResult = match with_timeout(AVERAGE_TIMEOUT, AVERAGE_DONE.wait()).await {
+        Ok(Ok(accumulator)) => Ok(accumulator.finish()),
+        Ok(Err(e)) => Err(e),
+        Err(_timeout) => {
+            AVERAGING.lock(|a| a.borrow_mut().take());
+            Err(AverageError::Timeout)
+        }
+    };
+    match &result {
+        Ok(average) => defmt::info!("average: {}", average),
+        Err(e) => defmt::warn!("average failed: {}", e),
+    }
+    if sender
+        .reply::<AverageEndpoint>(header.seq_no, &result)
+        .await
+        .is_err()
+    {
+        defmt::warn!("average reply failed");
+    }
+}
+
+/// Ends a running `average` with an error (no-op if none is running).
+fn abort_average(error: AverageError) {
+    if AVERAGING.lock(|a| a.borrow_mut().take()).is_some() {
+        AVERAGE_DONE.signal(Err(error));
+    }
+}
+
 /// Records a new status (`Terminated` is final) and wakes the publisher if it changed.
 fn set_status(new: AdcStatus) {
     let changed = ADC_STATUS.lock(|s| {
@@ -264,6 +328,21 @@ pub async fn pump(stream: Receiver<'static, CriticalSectionRawMutex, AdcsEvent, 
                 let state = CALIBRATION.lock(|s| s.get());
                 let values = wrench_from_counts(&state.matrix, &state.zero, &raw);
 
+                // Feed a running `average`; hand it over when complete.
+                let complete = AVERAGING.lock(|a| {
+                    let mut a = a.borrow_mut();
+                    let accumulator = a.as_mut()?;
+                    accumulator.push(&raw);
+                    if accumulator.n() >= AVERAGE_READINGS {
+                        a.take()
+                    } else {
+                        None
+                    }
+                });
+                if let Some(accumulator) = complete {
+                    AVERAGE_DONE.signal(Ok(accumulator));
+                }
+
                 // Dropped if full; gaps are visible in the timestamps.
                 let _ = OUTGOING.try_send(Readings { timestamp_us, raw });
                 let _ = WRENCHES.try_send(Wrench {
@@ -274,12 +353,14 @@ pub async fn pump(stream: Receiver<'static, CriticalSectionRawMutex, AdcsEvent, 
             AdcsEvent::Error(e) => {
                 defmt::warn!("ADC error: {}", e);
                 set_status(AdcStatus::Errored);
+                abort_average(AverageError::AdcError);
                 // Dropped if full (see ERRORS); the status still says `Errored`.
                 let _ = ERRORS.try_send(e);
             }
             AdcsEvent::Terminate => {
                 defmt::error!("ADC sampling terminated");
                 set_status(AdcStatus::Terminated);
+                abort_average(AverageError::AdcError);
             }
         }
     }

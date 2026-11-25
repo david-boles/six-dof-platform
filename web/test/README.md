@@ -51,7 +51,13 @@ Defined at the top of `../mockgen/src/main.rs`. After the stream ends (about 4 s
   zeroed".
 - ADC status: terminated; device log: one `ADC error: I2c(Timeout) (fake)`.
 - Requests (`FAKE_SERIAL.requests`): `interface/hash/get`, `info/get`,
-  `adc/status/get`, `time/get`, `calibration/get`, `zero/get`.
+  `adc/status/get`, `time/get`, `calibration/get`, `zero/get` (then `average` per
+  click).
+- "Average 1 s": "averaging..." with the button disabled for 1 s, then "250
+  readings" and a table with mean about −21,918 and standard deviation about 2.0
+  per cell (the noise is uniform over −3..3 counts: √((7² − 1)/12) = 2). Body
+  `0100` (= `Err(AdcError)`) or `0101` (= `Err(Timeout)`) for the `average` entry →
+  the matching error message.
 - Disconnect and Connect again: the same results again.
 - Interface check (edit `MOCK.endpoints` before connecting): a different
   `interface/hash/get` body → "built from different interface versions"; the entry

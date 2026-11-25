@@ -32,6 +32,11 @@ pub type ZeroCounts = [f32; CHANNELS];
 /// Reply to the `*/set` endpoints. (An alias because postcard-rpc's
 /// `endpoints!` table only accepts single-token types.)
 pub type SetResult = Result<(), SetError>;
+/// Reply to `average` (alias: see `SetResult`).
+pub type AverageResult = Result<AverageCounts, AverageError>;
+
+/// How long `average` averages for.
+pub const AVERAGE_DURATION_MS: u32 = 1000;
 
 // Endpoints:
 // - `interface/hash/get`: the firmware's `INTERFACE_HASH`. The UI asks for it
@@ -45,6 +50,10 @@ pub type SetResult = Result<(), SetError>;
 // - `calibration/get|set`, `zero/get|set`: C and z used for the `wrench` topic.
 //   Held in RAM only: after a reset the firmware uses `geometry::DEFAULT_C` and
 //   z = 0 again. `set` refuses NaN and infinite values.
+// - `average`: mean and standard deviation of the raw counts over the next
+//   `AVERAGE_DURATION_MS` (e.g. for zeroing: then `zero/set` with the mean).
+//   One at a time: a second request while one runs gets postcard-rpc's
+//   `WireError::FailedToSpawn`.
 endpoints! {
     list = ENDPOINT_LIST;
     | EndpointTy               | RequestTy         | ResponseTy         | Path                 |
@@ -57,6 +66,7 @@ endpoints! {
     | SetCalibrationEndpoint   | CalibrationMatrix | SetResult          | "calibration/set"    |
     | GetZeroEndpoint          | ()                | ZeroSetting        | "zero/get"           |
     | SetZeroEndpoint          | ZeroCounts        | SetResult          | "zero/set"           |
+    | AverageEndpoint          | ()                | AverageResult      | "average"            |
 }
 
 topics! {
@@ -155,6 +165,7 @@ pub const MAX_REQUEST_SIZE: usize = MAX_HEADER_SIZE
         request_size::<SetCalibrationEndpoint>(),
         request_size::<GetZeroEndpoint>(),
         request_size::<SetZeroEndpoint>(),
+        request_size::<AverageEndpoint>(),
         // postcard-rpc's standard ping endpoint (`u32`).
         u32::POSTCARD_MAX_SIZE,
     ]);
@@ -170,6 +181,7 @@ pub const MAX_DEVICE_MESSAGE_SIZE: usize = MAX_HEADER_SIZE
         response_size::<SetCalibrationEndpoint>(),
         response_size::<GetZeroEndpoint>(),
         response_size::<SetZeroEndpoint>(),
+        response_size::<AverageEndpoint>(),
         message_size::<ReadingsTopic>(),
         message_size::<AdcStatusTopic>(),
         message_size::<WrenchTopic>(),
@@ -310,6 +322,28 @@ pub struct ZeroSetting {
     pub counts: ZeroCounts,
     /// True until `zero/set` is called (zero offsets are all 0).
     pub is_boot_default: bool,
+}
+
+/// Reply to `average`: statistics of the raw counts per channel.
+#[derive(Serialize, Deserialize, Schema, MaxSize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct AverageCounts {
+    /// Mean, in ADC counts.
+    pub mean: [f32; CHANNELS],
+    /// Sample standard deviation (noise), in ADC counts.
+    pub std_dev: [f32; CHANNELS],
+    /// Number of readings averaged.
+    pub n: u32,
+}
+
+/// Why `average` failed.
+#[derive(Serialize, Deserialize, Schema, MaxSize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum AverageError {
+    /// An ADC error happened during the averaging window (details in the log).
+    AdcError,
+    /// Not enough readings arrived in time (e.g. sampling has terminated).
+    Timeout,
 }
 
 /// Why a `*/set` request was refused.
